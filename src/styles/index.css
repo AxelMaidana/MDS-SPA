@@ -1,0 +1,27 @@
+@font-face {
+  font-family: 'Quicksand';
+  src: url('../assets/fonts/Quicksand-Variable.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'Dancing Script';
+  src: url('../assets/fonts/DancingScript-Variable.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+}
+
+/* Variable CSS global */
+:root {
+  --font-quicksand: 'Quicksand', sans-serif;
+  --font-dancing-script: 'Dancing Script', sans-serif;
+}
+
+.tipo-quicksand {
+  font-family: var(--font-quicksand);
+}
+
+.tipo-dancing {
+  font-family: var(--font-dancing-script);
+}
