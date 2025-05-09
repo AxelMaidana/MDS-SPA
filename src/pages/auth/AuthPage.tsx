@@ -21,8 +21,7 @@ const AuthPage = ({ initialMode = 'login' }: AuthPageProps) => {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const { login } = useAuth();
-  const { registerPreRegisteredUser } = useAuth();
+  const { login, register } = useAuth();
   const navigate = useNavigate();
 
 
@@ -57,7 +56,7 @@ const handleSubmit = async (e: FormEvent) => {
 
   try {
     setLoading(true);
-    await registerPreRegisteredUser(email, password);
+    await register(email, password, name);
     navigate('/');
   } catch (err: any) {
     setError(err.message);
