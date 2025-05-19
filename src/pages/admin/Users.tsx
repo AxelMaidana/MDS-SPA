@@ -3,7 +3,7 @@ import { useState, useEffect, FormEvent } from 'react';
 import { collection, getDocs, doc, getDoc, addDoc, updateDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { db, storage } from '../../firebase/config';
 import toast from 'react-hot-toast';
-import { PlusCircle, Edit, Trash, Loader2, X, Upload, Filter, User } from 'lucide-react';
+import { PlusCircle, Edit, Trash, Loader2, X, Filter, User } from 'lucide-react';
 import { deleteObject, getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 
 interface User {
@@ -25,7 +25,7 @@ const AdminUsers = () => {
   const [formLoading, setFormLoading] = useState(false);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [imageFile, setImageFile] = useState<File | null>(null);
-  const [imagePreview, setImagePreview] = useState<string>('');
+  const [, setImagePreview] = useState<string>('');
   const [deleteId, setDeleteId] = useState<string | null>(null);
   
   // Filtros
@@ -150,10 +150,10 @@ const AdminUsers = () => {
       displayName: user.displayName,
       role: user.role,
       specialty: user.specialty || '',
-      imageUrl: user.imageUrl
+      imageUrl: ""
     });
     setCurrentUser(user);
-    setImagePreview(user.imageUrl);
+    setImagePreview("");
     setIsEditing(true);
     setShowModal(true);
   };
@@ -166,69 +166,47 @@ const AdminUsers = () => {
     });
   };
 
-  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0];
-      setImageFile(file);
+  // const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  //   if (e.target.files && e.target.files[0]) {
+  //     const file = e.target.files[0];
+  //     setImageFile(file);
       
-      const reader = new FileReader();
-      reader.onload = () => {
-        setImagePreview(reader.result as string);
-      };
-      reader.readAsDataURL(file);
-    }
-  };
+  //     const reader = new FileReader();
+  //     reader.onload = () => {
+  //       setImagePreview(reader.result as string);
+  //     };
+  //     reader.readAsDataURL(file);
+  //   }
+  // };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     
     if (!formData.email || !formData.displayName || !formData.role) {
-      toast.error('Please fill all required fields');
+      toast.error('Por favor complete todos los campos requeridos');
       return;
     }
     
     if (formData.role === 'staff' && !formData.specialty) {
-      toast.error('Please select a specialty for staff members');
-      return;
-    }
-    
-    if (!isEditing && !imageFile && !formData.imageUrl) {
-      toast.error('Please upload an image');
+      toast.error('Por favor seleccione una especialidad para el personal');
       return;
     }
     
     setFormLoading(true);
     
     try {
-      let imageUrl = formData.imageUrl;
-      
-      if (imageFile) {
-        const storageRef = ref(storage, `users/${Date.now()}_${imageFile.name}`);
-        await uploadBytes(storageRef, imageFile);
-        imageUrl = await getDownloadURL(storageRef);
-      }
-      
+      // Solo creamos el documento en Firestore, no en Auth
       const userData = {
         displayName: formData.displayName,
         email: formData.email,
         role: formData.role,
         ...(formData.role === 'staff' && { specialty: formData.specialty }),
-        imageUrl: imageUrl,
-        updatedAt: serverTimestamp(),
-        ...(!isEditing && { createdAt: serverTimestamp() })
+        authCreated: false, // Marcamos que aún no tiene cuenta de auth
+        createdAt: serverTimestamp()
       };
       
-      if (isEditing && currentUser) {
-        await updateDoc(doc(db, 'users', currentUser.id), userData);
-        toast.success('User updated successfully');
-        setUsers(users.map(user => 
-          user.id === currentUser.id ? { ...user, ...userData } : user
-        ));
-      } else {
-        const docRef = await addDoc(collection(db, 'users'), userData);
-        toast.success('User added successfully');
-        setUsers([...users, { id: docRef.id, ...userData }]);
-      }
+      await addDoc(collection(db, 'users'), userData);
+      toast.success('Usuario pre-registrado exitosamente!');
       
       setShowModal(false);
       setFormData({
@@ -238,11 +216,10 @@ const AdminUsers = () => {
         specialty: '',
         imageUrl: ''
       });
-      setImageFile(null);
-      setImagePreview('');
+      fetchUsers(); // Refrescar la lista
     } catch (error) {
-      console.error('Error saving user:', error);
-      toast.error('Failed to save user');
+      console.error('Error al guardar usuario:', error);
+      toast.error('Error al guardar usuario');
     } finally {
       setFormLoading(false);
     }
@@ -575,76 +552,6 @@ const AdminUsers = () => {
                       ))}
                     </optgroup>
                   </select>
-                </div>
-              )}
-              
-              <div className="form-group">
-                <label className="form-label">User Image</label>
-                <div className="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-secondary-300 border-dashed rounded-md">
-                  {imagePreview ? (
-                    <div className="text-center">
-                      <img 
-                        src={imagePreview}
-                        alt="Preview"
-                        className="mx-auto h-48 object-cover mb-4"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setImagePreview('');
-                          setImageFile(null);
-                          setFormData({ ...formData, imageUrl: '' });
-                        }}
-                        className="text-error-600 hover:text-error-800 text-sm font-medium"
-                        disabled={formLoading}
-                      >
-                        Remove Image
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="space-y-1 text-center">
-                      <Upload className="mx-auto h-12 w-12 text-secondary-400" />
-                      <div className="flex text-sm text-secondary-600">
-                        <label
-                          htmlFor="image-upload"
-                          className="relative cursor-pointer bg-white rounded-md font-medium text-primary-600 hover:text-primary-700"
-                        >
-                          <span>Upload a file</span>
-                          <input
-                            id="image-upload"
-                            name="image-upload"
-                            type="file"
-                            className="sr-only"
-                            accept="image/*"
-                            onChange={handleImageChange}
-                            disabled={formLoading}
-                          />
-                        </label>
-                        <p className="pl-1">or drag and drop</p>
-                      </div>
-                      <p className="text-xs text-secondary-500">
-                        PNG, JPG, GIF up to 10MB
-                      </p>
-                    </div>
-                  )}
-                </div>
-              </div>
-              
-              {!isEditing && !imageFile && !formData.imageUrl && (
-                <div className="text-sm mb-4">
-                  <p className="text-secondary-700">
-                    Don't have an image? You can use a direct URL to an image:
-                  </p>
-                  <input
-                    type="url"
-                    id="imageUrl"
-                    name="imageUrl"
-                    value={formData.imageUrl}
-                    onChange={handleInputChange}
-                    className="form-input mt-2"
-                    placeholder="https://example.com/image.jpg"
-                    disabled={formLoading}
-                  />
                 </div>
               )}
               

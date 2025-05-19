@@ -9,7 +9,7 @@ import {
   onAuthStateChanged,
   updateProfile
 } from 'firebase/auth';
-import { doc, setDoc, getDoc, serverTimestamp, collection, query, where, getDocs, deleteDoc } from 'firebase/firestore';
+import { doc, setDoc, getDoc, serverTimestamp, collection, query, where, getDocs, writeBatch } from 'firebase/firestore';
 import { auth, db } from '../firebase/config';
 import toast from 'react-hot-toast';
 
@@ -175,7 +175,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
     }
   }
 
-// Modifica la función registerPreRegisteredUser en tu AuthContext
 async function registerPreRegisteredUser(email: string, password: string): Promise<void> {
   try {
     // 1. Buscar usuario en Firestore
@@ -183,61 +182,102 @@ async function registerPreRegisteredUser(email: string, password: string): Promi
     const q = query(usersRef, where('email', '==', email));
     const querySnapshot = await getDocs(q);
 
+    if (querySnapshot.empty) {
+      throw new Error('No existe un usuario pre-registrado con este email');
+    }
+
     const userDoc = querySnapshot.docs[0];
     const userData = userDoc.data();
-    const oldUid = userDoc.id; // Guardamos el UID original
+
+    // Verificar si ya tiene auth creada
+    if (userData.authCreated) {
+      throw new Error('Este usuario ya completó su registro');
+    }
 
     // 2. Crear cuenta en Authentication
     const userCredential = await createUserWithEmailAndPassword(auth, email, password);
     const newUser = userCredential.user;
 
-    // 3. Eliminar el documento viejo y crear uno nuevo con el UID correcto
-    await deleteDoc(doc(db, 'users', oldUid));
-    
-    // Crear nuevo documento con los mismos datos pero nuevo UID
-    await setDoc(doc(db, 'users', newUser.uid), {
+    // 3. Actualizar todos los documentos relacionados usando una transacción batch
+    const batch = writeBatch(db);
+
+    // a. Crear nuevo documento de usuario con el UID de auth como ID
+    batch.set(doc(db, 'users', newUser.uid), {
       ...userData,
       uid: newUser.uid,
       authCreated: true,
       updatedAt: serverTimestamp()
     });
 
-    toast.success('Cuenta creada exitosamente!');
-  } catch (error: any) {
+    // b. Actualizar referencias en otras colecciones (ej. appointments)
+    const appointmentsQuery = query(
+      collection(db, 'appointments'),
+      where('staffFirestoreId', '==', userDoc.id)
+    );
+    const appointmentsSnapshot = await getDocs(appointmentsQuery);
     
-   console.error('Error al registrar el usuario pre-registrado:', error);
+    appointmentsSnapshot.forEach((apptDoc) => {
+      batch.update(apptDoc.ref, {
+        staffId: newUser.uid,
+        staffFirestoreId: newUser.uid // Actualizamos a la nueva referencia
+      });
+    });
+
+    // c. Eliminar el documento viejo
+    batch.delete(userDoc.ref);
+
+    await batch.commit();
+    
+    // 4. Actualizar el perfil del usuario en Auth si hay displayName
+    if (userData.displayName) {
+      await updateProfile(newUser, {
+        displayName: userData.displayName
+      });
+    }
+
+    toast.success('Registro completado exitosamente!');
+  } catch (error: any) {
+    console.error('Error en registro:', error);
+    toast.error(error.message || 'Error al completar el registro');
+    throw error;
   }
 }
 
 async function login(email: string, password: string) {
   try {
-    //validaciones
     if (!email || !password) {
-      toast.error('Por favor completa todos los campos');
       throw new Error('Por favor completa todos los campos');
     }
 
-    if (password.length < 6) {
-      toast.error('La contraseña debe tener al menos 6 caracteres');
-    }
-    // Intento normal de login
-    await signInWithEmailAndPassword(auth, email, password);
-    toast.success('Inicio de sesión exitoso!');
-  } catch (error: any) {
-    // Si el usuario no existe en Auth pero sí en Firestore
-    if (error.code === 'asdasdasd') {
-      const usersRef = collection(db, 'users');
-      const q = query(usersRef, where('email', '==', email));
-      const querySnapshot = await getDocs(q);
-      
-      if (!querySnapshot.empty) {
-        const userData = querySnapshot.docs[0].data();
-        // Redirigir solo si no ha completado el registro (authCreated no existe o es false)
-        if (!userData.authCreated) {
-          throw { redirect: true, message: 'Por favor completa tu registro' };
+    try {
+      // Intento normal de login
+      await signInWithEmailAndPassword(auth, email, password);
+      toast.success('Inicio de sesión exitoso!');
+    } catch (authError: any) {
+      // Si el error es "invalid-credential" (nuevo en Firebase v9+)
+      if (authError.code === 'auth/invalid-credential') {
+        // Verificar si el usuario está pre-registrado en Firestore
+        const usersRef = collection(db, 'users');
+        const q = query(usersRef, where('email', '==', email));
+        const querySnapshot = await getDocs(q);
+
+        if (!querySnapshot.empty) {
+          const userDoc = querySnapshot.docs[0];
+          const userData = userDoc.data();
+          if (!userData.authCreated) {
+            // Lanzar error especial para redirigir
+            throw { 
+              code: 'PRE_REGISTERED_USER', 
+              message: 'Completa tu registro primero' 
+            };
+          }
         }
       }
+      throw authError; // Relanzar otros errores
     }
+  } catch (error: any) {
+    console.error('Error en login:', error);
+    toast.error(error.message);
     throw error;
   }
 }

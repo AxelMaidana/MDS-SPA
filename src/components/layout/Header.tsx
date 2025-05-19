@@ -126,10 +126,11 @@ const Header = () => {
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: -10 }}
                     >
-                      <div className="px-4 py-3">
-                        <p className="text-sm">{currentUser.displayName || "Usuario"}</p>
+                      <div className="px-4 mt-2">
                         <p className="text-sm font-medium truncate">{currentUser.email}</p>
+                        <p className="text-sm opacity-60">{currentUser.displayName || "Cliente"}</p>
                       </div>
+                      <hr className="my-2 border-white/10"/>
                       <ul className="py-1">
                         {userRole === 'admin' && (
                           <li>

@@ -37,7 +37,7 @@ const Profile = () => {
           const basicData = {
             displayName: currentUser.displayName || '',
             email: currentUser.email || '',
-            photoURL: currentUser.photoURL || '',
+            photoURL: currentUser.photoURL ||'',
           };
 
           // Obtener datos adicionales de Firestore

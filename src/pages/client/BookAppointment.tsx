@@ -5,9 +5,9 @@ import { db } from '../../firebase/config';
 import { useAuth } from '../../contexts/AuthContext';
 import DatePicker from 'react-datepicker';
 import "react-datepicker/dist/react-datepicker.css";
-import { addDays, isAfter, isBefore, setHours, setMinutes, format } from 'date-fns';
+import { addDays, isAfter, isBefore, setHours, setMinutes, format, differenceInHours } from 'date-fns';
 import toast from 'react-hot-toast';
-import { Calendar, Clock, UserCheck, ChevronRight, Check, ArrowRight } from 'lucide-react';
+import { Calendar, Clock, UserCheck, ChevronRight, Check, ArrowRight, CreditCard } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 interface Service {
@@ -15,7 +15,7 @@ interface Service {
   name: string;
   description: string;
   price: number;
-  duration: number;
+  duration: number; 
   imageUrl: string;
   specialty: string;
   availableTimes?: string[];
@@ -50,8 +50,15 @@ const BookAppointment = () => {
   const [currentService, setCurrentService] = useState<Service | null>(null);
   const [currentStaff, setCurrentStaff] = useState<StaffMember | null>(null);
   const [showSuccess, setShowSuccess] = useState(false);
-  const [activeStep, setActiveStep] = useState<'services' | 'staff' | 'datetime'>('services');
+  const [activeStep, setActiveStep] = useState<'services' | 'staff' | 'datetime' | 'payment'>('services');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
+  const [paymentMethod, setPaymentMethod] = useState<'web' | 'onsite' | null>(null);
+  const [cardDetails, setCardDetails] = useState({
+    number: '',
+    expiry: '',
+    cvv: ''
+  });
+  const [selectedServices, setSelectedServices] = useState<Service[]>([]);
 
   // Obtener todas las especialidades únicas
   const getSpecialties = () => {
@@ -157,7 +164,37 @@ const BookAppointment = () => {
     setSelectedTime('');
   };
 
-  const handleSubmit = async () => {
+  const handleAddAnotherService = () => {
+    if (currentService) {
+      setSelectedServices([...selectedServices, currentService]);
+      setSelectedService('');
+      setSelectedStaff('');
+      setSelectedDate(null);
+      setSelectedTime('');
+      setActiveStep('services');
+      toast.success('Servicio agregado. Selecciona otro servicio o procede al pago.');
+    }
+  };
+
+  const handleRemoveService = (serviceId: string) => {
+    setSelectedServices(selectedServices.filter(s => s.id !== serviceId));
+  };
+
+  const calculateTotal = () => {
+    const basePrice = selectedServices.reduce((sum, service) => sum + service.price, currentService?.price || 0);
+    
+    // Aplicar descuento del 15% si se paga online y es más de 48 horas antes
+    if (paymentMethod === 'web' && selectedDate) {
+      const hoursUntilAppointment = differenceInHours(selectedDate, new Date());
+      if (hoursUntilAppointment > 48) {
+        return basePrice * 0.85; // 15% de descuento
+      }
+    }
+    
+    return basePrice;
+  };
+
+  const handlePaymentSubmit = async () => {
     if (!currentUser || !selectedService || !selectedStaff || !selectedDate || !selectedTime) {
       toast.error('Por favor completa todos los campos');
       return;
@@ -174,15 +211,26 @@ const BookAppointment = () => {
       const [hours, minutes] = selectedTime.split(':').map(Number);
       const appointmentDateTime = setMinutes(setHours(selectedDate, hours), minutes);
       
+      const allServices = [...selectedServices, currentService];
+      const totalPrice = calculateTotal();
+      const paymentStatus = paymentMethod === 'web' ? 'paid' : 'pending';
+      const discountApplied = paymentMethod === 'web' && differenceInHours(appointmentDateTime, new Date()) > 48;
+
+      // Crear una sola reserva para todos los servicios si son el mismo día
       const appointmentData = {
         userId: currentUser.uid,
         userEmail: currentUser.email,
         userName: currentUser.displayName,
-        serviceId: selectedService,
-        serviceName: currentService.name,
-        servicePrice: currentService.price,
-        serviceDuration: currentService.duration,
-        serviceSpecialty: currentService.specialty,
+        services: allServices.map(service => ({
+          id: service.id,
+          name: service.name,
+          price: service.price,
+          duration: service.duration
+        })),
+        totalPrice,
+        paymentMethod,
+        paymentStatus,
+        discountApplied,
         staffId: selectedStaff,
         staffName: currentStaff?.displayName || 'Desconocido',
         date: appointmentDateTime,
@@ -191,6 +239,11 @@ const BookAppointment = () => {
       };
       
       await addDoc(collection(db, 'appointments'), appointmentData);
+      
+      // Enviar comprobante por email (simulado)
+      if (paymentMethod === 'web') {
+        toast.success('Pago procesado y comprobante enviado a tu email');
+      }
       
       setShowSuccess(true);
     } catch (error) {
@@ -228,6 +281,19 @@ const BookAppointment = () => {
     setSelectedTime('');
   };
 
+  const handleBackToDatetime = () => {
+    setActiveStep('datetime');
+    setPaymentMethod(null);
+  };
+
+  const handleProceedToPayment = () => {
+    if (!selectedDate || !selectedTime) {
+      toast.error('Por favor selecciona fecha y hora');
+      return;
+    }
+    setActiveStep('payment');
+  };
+
   return (
     <div className="min-h-screen pt-24 pb-12 bg-gradient-to-b from-[#F8FAF4] to-white">
       <div className="max-w-[100rem] mx-auto px-4 sm:px-6 lg:px-8">
@@ -257,7 +323,7 @@ const BookAppointment = () => {
                 <div className={`p-5 rounded-xl transition-all duration-300 ${
                   activeStep === 'services' 
                     ? "bg-gradient-to-r from-[#0C9383] to-[#99D4D6] text-white shadow-lg"
-                    : selectedService
+                    : selectedService || selectedServices.length > 0
                       ? "bg-white border border-[#0C9383] shadow-md"
                       : "bg-white border border-gray-200 shadow-md"
                 }`}>
@@ -265,18 +331,20 @@ const BookAppointment = () => {
                     <div className={`w-12 h-12 rounded-full flex items-center justify-center ${
                       activeStep === 'services' 
                         ? "bg-white/20" 
-                        : selectedService 
+                        : selectedService || selectedServices.length > 0
                           ? "bg-[#0C9383] text-white" 
                           : "bg-gray-100 text-[#0C9383]"
                     }`}>
                       <span className="font-bold">
-                        {selectedService ? <Check size={20} /> : '1'}
+                        {(selectedService || selectedServices.length > 0) ? <Check size={20} /> : '1'}
                       </span>
                     </div>
                     <div className="ml-4 flex-1">
-                      <h3 className="font-medium">Servicio</h3>
+                      <h3 className="font-medium">Servicio{selectedServices.length > 0 ? 's' : ''}</h3>
                       <p className="text-sm mt-1">
-                        {currentService?.name || "Selecciona un servicio"}
+                        {selectedServices.length > 0 
+                          ? `${selectedServices.length} servicio(s) seleccionado(s)`
+                          : currentService?.name || "Selecciona un servicio"}
                       </p>
                     </div>
                   </div>
@@ -304,9 +372,9 @@ const BookAppointment = () => {
                       </span>
                     </div>
                     <div className="ml-4 flex-1">
-                      <h3 className="font-medium">Especialista</h3>
+                      <h3 className="font-medium">Profesional</h3>
                       <p className="text-sm mt-1">
-                        {currentStaff?.displayName || "Selecciona un especialista"}
+                        {currentStaff?.displayName || "Selecciona un Profesional"}
                       </p>
                     </div>
                   </div>
@@ -343,6 +411,38 @@ const BookAppointment = () => {
                     </div>
                   </div>
                 </div>
+
+                {/* Payment Step */}
+                <div className={`p-5 rounded-xl transition-all duration-300 ${
+                  activeStep === 'payment'
+                    ? "bg-gradient-to-r from-[#0C9383] to-[#99D4D6] text-white shadow-lg"
+                    : paymentMethod
+                      ? "bg-white border border-[#0C9383] shadow-md"
+                      : "bg-white border border-gray-200 shadow-md"
+                } ${selectedDate && selectedTime ? "cursor-pointer" : "opacity-60 cursor-not-allowed"}`}
+                onClick={() => selectedDate && selectedTime && setActiveStep('payment')}>
+                  <div className="flex items-center">
+                    <div className={`w-12 h-12 rounded-full flex items-center justify-center ${
+                      activeStep === 'payment'
+                        ? "bg-white/20" 
+                        : paymentMethod 
+                          ? "bg-[#0C9383] text-white" 
+                          : "bg-gray-100 text-[#0C9383]"
+                    }`}>
+                      <span className="font-bold">
+                        {paymentMethod ? <Check size={20} /> : '4'}
+                      </span>
+                    </div>
+                    <div className="ml-4 flex-1">
+                      <h3 className="font-medium">Pago</h3>
+                      <p className="text-sm mt-1">
+                        {paymentMethod 
+                          ? paymentMethod === 'web' ? 'Pago online' : 'Pago en sitio'
+                          : "Selecciona método de pago"}
+                      </p>
+                    </div>
+                  </div>
+                </div>
               </div>
 
               {/* Contact Info */}
@@ -373,8 +473,6 @@ const BookAppointment = () => {
 
           {/* Right Panel - Content */}
           <div className="w-full lg:w-3/5">
-            
-
             <AnimatePresence mode="wait">
               <motion.div
                 key={activeStep}
@@ -473,7 +571,7 @@ const BookAppointment = () => {
                       </button>
                       
                       <h2 className="text-3xl font-bold bg-gradient-to-r from-[#0C9383] to-[#0C9383] bg-clip-text text-transparent mb-2">
-                        Selecciona tu Especialista
+                        Selecciona tu Profesional
                       </h2>
                       <p className="text-gray-600">
                         Elige al profesional que realizará tu tratamiento
@@ -524,7 +622,7 @@ const BookAppointment = () => {
                                 <p className="text-sm text-gray-500">{member.specialty}</p>
                                 <div className="mt-2 flex items-center">
                                   <span className="text-xs bg-[#0C9383]/10 text-[#0C9383] px-2 py-1 rounded-full">
-                                    {member.role === 'staff' ? 'Especialista' : member.role}
+                                    {member.role === 'staff' ? 'Profesional' : member.role}
                                   </span>
                                 </div>
                               </div>
@@ -533,7 +631,7 @@ const BookAppointment = () => {
                         ))
                       ) : (
                         <div className="col-span-2 text-center py-8 text-gray-500">
-                          No hay especialistas disponibles para este servicio
+                          No hay Profesionales disponibles para este servicio
                         </div>
                       )}
                     </div>
@@ -549,7 +647,7 @@ const BookAppointment = () => {
                         className="flex items-center text-[#0C9383] mb-4"
                       >
                         <ChevronRight className="rotate-180 mr-1" size={18} />
-                        Volver a especialistas
+                        Volver a Profesionales
                       </button>
                       
                       <h2 className="text-3xl font-bold bg-gradient-to-r from-[#0C9383] to-[#28edf0] bg-clip-text text-transparent mb-2">
@@ -606,7 +704,7 @@ const BookAppointment = () => {
                     </div>
 
                     {/* Summary */}
-                    {(selectedService || selectedStaff || selectedDate) && (
+                    {(selectedService || selectedStaff || selectedDate || selectedServices.length > 0) && (
                       <motion.div
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
@@ -615,9 +713,47 @@ const BookAppointment = () => {
                       >
                         <h3 className="text-lg font-semibold text-[#2F3E2E] mb-4">Resumen de tu Cita</h3>
                         
+                        {/* Servicios seleccionados */}
+                        {selectedServices.length > 0 && (
+                          <div className="mb-4 pb-4 border-b border-[#0C9383]/10">
+                            <h4 className="text-sm font-medium text-[#2F3E2E]">Servicios adicionales</h4>
+                            <div className="space-y-3 mt-2">
+                              {selectedServices.map((service) => (
+                                <div key={service.id} className="flex items-start gap-3">
+                                  <div className="w-16 h-16 rounded-md overflow-hidden">
+                                    <img 
+                                      src={service.imageUrl} 
+                                      alt={service.name}
+                                      className="w-full h-full object-cover"
+                                    />
+                                  </div>
+                                  <div className="flex-1">
+                                    <p className="text-[#2F3E2E] font-medium">{service.name}</p>
+                                    <div className="flex gap-4 mt-1">
+                                      <span className="text-xs text-[#0C9383] flex items-center">
+                                        <Clock size={12} className="mr-1" />
+                                        {service.duration} min
+                                      </span>
+                                      <span className="text-xs font-bold text-[#0C9383]">
+                                        ${service.price}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <button 
+                                    onClick={() => handleRemoveService(service.id)}
+                                    className="text-red-500 hover:text-red-700"
+                                  >
+                                    ×
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        
                         {currentService && (
                           <div className="mb-4 pb-4 border-b border-[#0C9383]/10">
-                            <h4 className="text-sm font-medium text-[#2F3E2E]">Servicio</h4>
+                            <h4 className="text-sm font-medium text-[#2F3E2E]">Servicio actual</h4>
                             <div className="flex items-start gap-3 mt-2">
                               <div className="w-16 h-16 rounded-md overflow-hidden">
                                 <img 
@@ -644,7 +780,7 @@ const BookAppointment = () => {
                         
                         {currentStaff && (
                           <div className="mb-4 pb-4 border-b border-[#0C9383]/10">
-                            <h4 className="text-sm font-medium text-[#2F3E2E]">Especialista</h4>
+                            <h4 className="text-sm font-medium text-[#2F3E2E]">Profesional</h4>
                             <div className="flex items-center gap-3 mt-2">
                               <div className="w-12 h-12 rounded-full overflow-hidden">
                                 {currentStaff.imageUrl ? (
@@ -681,34 +817,248 @@ const BookAppointment = () => {
                           </div>
                         )}
 
-                        <button
-                          onClick={handleSubmit}
-                          disabled={!selectedDate || !selectedTime || submitting}
-                          className={`w-full mt-6 py-4 rounded-xl text-white font-bold text-lg shadow-lg transition-all duration-300 ${
-                            selectedDate && selectedTime
-                              ? 'bg-gradient-to-r from-[#0C9383] to-[#99D4D6] hover:from-[#0C9383]/90 hover:to-[#99D4D6]/90 hover:shadow-xl'
-                              : 'bg-gray-300 cursor-not-allowed'
-                          }`}
-                        >
-                          {submitting ? (
-                            <span className="flex items-center justify-center gap-2">
-                              <motion.span
-                                animate={{ rotate: 360 }}
-                                transition={{ repeat: Infinity, duration: 1, ease: "linear" }}
-                                className="inline-block"
-                              >
-                                <Clock className="h-5 w-5" />
-                              </motion.span>
-                              Reservando...
+                        {/* Total */}
+                        <div className="mt-4 pt-4 border-t border-[#0C9383]/20">
+                          <div className="flex justify-between items-center">
+                            <span className="font-medium text-[#2F3E2E]">Total:</span>
+                            <span className="text-xl font-bold text-[#0C9383]">
+                              ${calculateTotal().toFixed(2)}
                             </span>
-                          ) : (
-                            <span className="flex items-center justify-center gap-2">
-                              Confirmar Reserva <ArrowRight size={20} />
-                            </span>
+                          </div>
+                          {selectedDate && differenceInHours(selectedDate, new Date()) > 48 && (
+                            <div className="text-sm text-green-600 mt-1">
+                              ¡Paga online ahora y obtén un 15% de descuento!
+                            </div>
                           )}
-                        </button>
+                        </div>
+
+                        <div className="flex gap-3 mt-6">
+                          {selectedServices.length > 0 && (
+                            <button
+                              onClick={handleAddAnotherService}
+                              className="flex-1 bg-white border border-[#0C9383] text-[#0C9383] py-3 rounded-xl font-medium hover:bg-[#0C9383]/10 transition"
+                            >
+                              Agregar Otro Servicio
+                            </button>
+                          )}
+                          <button
+                            onClick={handleProceedToPayment}
+                            disabled={!selectedDate || !selectedTime}
+                            className={`flex-1 py-3 rounded-xl text-white font-medium shadow-lg transition-all duration-300 ${
+                              selectedDate && selectedTime
+                                ? 'bg-gradient-to-r from-[#0C9383] to-[#99D4D6] hover:from-[#0C9383]/90 hover:to-[#99D4D6]/90 hover:shadow-xl'
+                                : 'bg-gray-300 cursor-not-allowed'
+                            }`}
+                          >
+                            Continuar al Pago
+                          </button>
+                        </div>
                       </motion.div>
                     )}
+                  </div>
+                )}
+
+                {/* Payment Selection */}
+                {activeStep === 'payment' && (
+                  <div className="space-y-6">
+                    <div>
+                      <button 
+                        onClick={handleBackToDatetime}
+                        className="flex items-center text-[#0C9383] mb-4"
+                      >
+                        <ChevronRight className="rotate-180 mr-1" size={18} />
+                        Volver a fecha y hora
+                      </button>
+                      
+                      <h2 className="text-3xl font-bold bg-gradient-to-r from-[#0C9383] to-[#28edf0] bg-clip-text text-transparent mb-2">
+                        Método de Pago
+                      </h2>
+                      <p className="text-gray-600">
+                        Selecciona cómo deseas pagar por tu reserva
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <motion.div
+                        whileHover={{ scale: 1.02 }}
+                        whileTap={{ scale: 0.98 }}
+                        className={`p-6 rounded-xl border-2 transition-all cursor-pointer ${
+                          paymentMethod === 'web' 
+                            ? 'border-[#0C9383] bg-[#0C9383]/10'
+                            : 'border-gray-200 hover:border-[#0C9383]/50'
+                        }`}
+                        onClick={() => setPaymentMethod('web')}
+                      >
+                        <div className="flex items-center gap-4 mb-4">
+                          <div className={`w-12 h-12 rounded-full flex items-center justify-center ${
+                            paymentMethod === 'web' ? 'bg-[#0C9383] text-white' : 'bg-gray-100 text-[#0C9383]'
+                          }`}>
+                            <CreditCard size={20} />
+                          </div>
+                          <h3 className="text-xl font-semibold">Pago Online</h3>
+                        </div>
+                        <ul className="space-y-2 text-gray-600">
+                          <li className="flex items-start">
+                            <Check className="w-4 h-4 text-green-500 mr-2 mt-1 flex-shrink-0" />
+                            <span>15% de descuento si pagas ahora</span>
+                          </li>
+                          <li className="flex items-start">
+                            <Check className="w-4 h-4 text-green-500 mr-2 mt-1 flex-shrink-0" />
+                            <span>Solo tarjeta de débito</span>
+                          </li>
+                          <li className="flex items-start">
+                            <Check className="w-4 h-4 text-green-500 mr-2 mt-1 flex-shrink-0" />
+                            <span>Recibirás comprobante por email</span>
+                          </li>
+                        </ul>
+                      </motion.div>
+
+                      <motion.div
+                        whileHover={{ scale: 1.02 }}
+                        whileTap={{ scale: 0.98 }}
+                        className={`p-6 rounded-xl border-2 transition-all cursor-pointer ${
+                          paymentMethod === 'onsite' 
+                            ? 'border-[#0C9383] bg-[#0C9383]/10'
+                            : 'border-gray-200 hover:border-[#0C9383]/50'
+                        }`}
+                        onClick={() => setPaymentMethod('onsite')}
+                      >
+                        <div className="flex items-center gap-4 mb-4">
+                          <div className={`w-12 h-12 rounded-full flex items-center justify-center ${
+                            paymentMethod === 'onsite' ? 'bg-[#0C9383] text-white' : 'bg-gray-100 text-[#0C9383]'
+                          }`}>
+                            <UserCheck size={20} />
+                          </div>
+                          <h3 className="text-xl font-semibold">Pago en el Local</h3>
+                        </div>
+                        <ul className="space-y-2 text-gray-600">
+                          <li className="flex items-start">
+                            <Check className="w-4 h-4 text-green-500 mr-2 mt-1 flex-shrink-0" />
+                            <span>Paga cuando llegues al spa</span>
+                          </li>
+                          <li className="flex items-start">
+                            <Check className="w-4 h-4 text-green-500 mr-2 mt-1 flex-shrink-0" />
+                            <span>Efectivo o tarjeta</span>
+                          </li>
+                          <li className="flex items-start">
+                            <Check className="w-4 h-4 text-green-500 mr-2 mt-1 flex-shrink-0" />
+                            <span>Precio de lista sin descuento</span>
+                          </li>
+                        </ul>
+                      </motion.div>
+                    </div>
+
+                    {/* Card Details Form */}
+                    {paymentMethod === 'web' && (
+                      <motion.div
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: 'auto' }}
+                        transition={{ duration: 0.3 }}
+                        className="mt-6 bg-gray-50 p-6 rounded-xl"
+                      >
+                        <h3 className="text-lg font-semibold mb-4 flex items-center">
+                          <CreditCard className="w-5 h-5 text-[#0C9383] mr-2" />
+                          Detalles de la Tarjeta
+                        </h3>
+                        <div className="space-y-4">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Número de Tarjeta</label>
+                            <input
+                              type="text"
+                              placeholder="1234 5678 9012 3456"
+                              className="w-full px-4 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-[#0C9383] focus:border-transparent"
+                              value={cardDetails.number}
+                              onChange={(e) => setCardDetails({...cardDetails, number: e.target.value})}
+                            />
+                          </div>
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <label className="block text-sm font-medium text-gray-700 mb-1">Fecha de Expiración</label>
+                              <input
+                                type="text"
+                                placeholder="MM/AA"
+                                className="w-full px-4 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-[#0C9383] focus:border-transparent"
+                                value={cardDetails.expiry}
+                                onChange={(e) => setCardDetails({...cardDetails, expiry: e.target.value})}
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-sm font-medium text-gray-700 mb-1">CVV</label>
+                              <input
+                                type="text"
+                                placeholder="123"
+                                className="w-full px-4 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-[#0C9383] focus:border-transparent"
+                                value={cardDetails.cvv}
+                                onChange={(e) => setCardDetails({...cardDetails, cvv: e.target.value})}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </motion.div>
+                    )}
+
+                    {/* Payment Summary */}
+                    <div className="bg-[#F8FAF4] p-6 rounded-xl border border-[#0C9383]/20 mt-6">
+                      <h3 className="text-lg font-semibold text-[#2F3E2E] mb-4">Resumen de Pago</h3>
+                      
+                      <div className="space-y-3 mb-4">
+                        {selectedServices.map((service) => (
+                          <div key={service.id} className="flex justify-between">
+                            <span>{service.name}</span>
+                            <span className="font-medium">${service.price}</span>
+                          </div>
+                        ))}
+                        {currentService && (
+                          <div className="flex justify-between">
+                            <span>{currentService.name}</span>
+                            <span className="font-medium">${currentService.price}</span>
+                          </div>
+                        )}
+                      </div>
+
+                      {paymentMethod === 'web' && selectedDate && differenceInHours(selectedDate, new Date()) > 48 && (
+                        <div className="flex justify-between py-2 border-t border-b border-[#0C9383]/20">
+                          <span className="text-green-600">Descuento (15%)</span>
+                          <span className="text-green-600 font-medium">
+                            -${((selectedServices.reduce((sum, s) => sum + s.price, currentService?.price || 0)) * 0.15).toFixed(2)}
+                          </span>
+                        </div>
+                      )}
+
+                      <div className="flex justify-between mt-4 pt-2 border-t border-[#0C9383]/20">
+                        <span className="font-semibold">Total a pagar</span>
+                        <span className="text-xl font-bold text-[#0C9383]">
+                          ${calculateTotal().toFixed(2)}
+                        </span>
+                      </div>
+
+                      <button
+                        onClick={handlePaymentSubmit}
+                        disabled={!paymentMethod || (paymentMethod === 'web' && (!cardDetails.number || !cardDetails.expiry || !cardDetails.cvv))}
+                        className={`w-full mt-6 py-4 rounded-xl text-white font-bold text-lg shadow-lg transition-all duration-300 ${
+                          paymentMethod && (paymentMethod === 'onsite' || (cardDetails.number && cardDetails.expiry && cardDetails.cvv))
+                            ? 'bg-gradient-to-r from-[#0C9383] to-[#99D4D6] hover:from-[#0C9383]/90 hover:to-[#99D4D6]/90 hover:shadow-xl'
+                            : 'bg-gray-300 cursor-not-allowed'
+                        }`}
+                      >
+                        {submitting ? (
+                          <span className="flex items-center justify-center gap-2">
+                            <motion.span
+                              animate={{ rotate: 360 }}
+                              transition={{ repeat: Infinity, duration: 1, ease: "linear" }}
+                              className="inline-block"
+                            >
+                              <Clock className="h-5 w-5" />
+                            </motion.span>
+                            Procesando...
+                          </span>
+                        ) : (
+                          <span className="flex items-center justify-center gap-2">
+                            {paymentMethod === 'web' ? 'Pagar Ahora' : 'Confirmar Reserva'} <ArrowRight size={20} />
+                          </span>
+                        )}
+                      </button>
+                    </div>
                   </div>
                 )}
               </motion.div>
@@ -724,19 +1074,21 @@ const BookAppointment = () => {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0  bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
           >
             <motion.div
               initial={{ scale: 0.9, y: 20 }}
               animate={{ scale: 1, y: 0 }}
               exit={{ scale: 0.9, y: 20 }}
-              className="bg-white rounded-2xl shadow-2xl max-w-md w-full  overflow-hidden"
+              className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden"
             >
               <div className="p-8 text-center">
                 <div className="mx-auto flex items-center justify-center h-16 w-16 rounded-full bg-green-100 mb-4">
                   <Check className="h-10 w-10 text-[#0C9383]" />
                 </div>
-                <h3 className="text-2xl font-bold text-gray-900 mb-2">¡Cita Confirmada!</h3>
+                <h3 className="text-2xl font-bold text-gray-900 mb-2">
+                  {paymentMethod === 'web' ? '¡Pago Exitoso!' : '¡Cita Confirmada!'}
+                </h3>
                 <div className="flex justify-center mb-4">
                   <div className="w-24 h-24 rounded-lg overflow-hidden">
                     <img 
@@ -747,7 +1099,14 @@ const BookAppointment = () => {
                   </div>
                 </div>
                 <p className="text-gray-600 mb-6">
-                  Tu {currentService?.name} con {currentStaff?.displayName} el {format(selectedDate || new Date(), 'PPP')} a las {selectedTime} ha sido reservada.
+                  {paymentMethod === 'web' ? (
+                    <>
+                      Tu pago de <span className="font-bold">${calculateTotal().toFixed(2)}</span> ha sido procesado. 
+                      Hemos enviado el comprobante a <span className="font-bold">{currentUser?.email}</span>.
+                    </>
+                  ) : (
+                    `Tu reserva ha sido confirmada. Por favor paga al llegar al spa.`
+                  )}
                 </p>
                 
                 <div className="space-y-3">
@@ -764,6 +1123,8 @@ const BookAppointment = () => {
                       setSelectedStaff('');
                       setSelectedDate(null);
                       setSelectedTime('');
+                      setSelectedServices([]);
+                      setPaymentMethod(null);
                       setActiveStep('services');
                     }}
                     className="w-full border border-[#0C9383] text-[#0C9383] py-3 rounded-lg font-medium hover:bg-[#0C9383]/10 transition"

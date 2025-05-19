@@ -1,665 +1,803 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
-import { useState, useEffect, FormEvent } from 'react';
-import { collection, getDocs, doc, getDoc, addDoc, updateDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
-import { db, storage } from '../../firebase/config';
+import { useState, useEffect } from 'react';
+import { collection, query, where, getDocs, orderBy, doc, updateDoc } from 'firebase/firestore';
+import { db } from '../../firebase/config';
+import { useAuth } from '../../contexts/AuthContext';
+import { Calendar, ChevronDown, ChevronUp, CheckCircle, XCircle, Printer, Clock, User, Mail, Phone, DollarSign, Info } from 'lucide-react';
+import { format, isToday, isTomorrow, isPast, isFuture } from 'date-fns';
+import { es } from 'date-fns/locale';
+import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
-import { Scissors, PlusCircle, Edit, Trash, Loader2, X, Upload } from 'lucide-react';
-import { deleteObject, getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 
-interface Staff {
+interface Service {
   id: string;
-  email: string;
-  displayName: string;
-  role: string;
-  createdAt?: any;
-  imageUrl: string;
+  name: string;
   price: number;
   duration: number;
 }
 
-const StaffDashboard = () => {
-  const [staff, setStaff] = useState<Staff[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [showModal, setShowModal] = useState(false);
-  const [isEditing, setIsEditing] = useState(false);
-  const [formLoading, setFormLoading] = useState(false);
-  const [currentStaff, setCurrentStaff] = useState<Staff | null>(null);
-  const [imageFile, setImageFile] = useState<File | null>(null);
-  const [imagePreview, setImagePreview] = useState<string>('');
-  const [deleteId, setDeleteId] = useState<string | null>(null);
+interface Appointment {
+  id: string;
+  userId: string;
+  userEmail: string;
+  userName: string;
+  userPhone?: string;
+  services: Service[];  // Cambiado de serviceName, servicePrice, serviceDuration a services array
+  staffId: string;
+  staffName: string;
+  date: {
+    seconds: number;
+    nanoseconds: number;
+  };
+  status: 'booked' | 'completed' | 'cancelled';
+  createdAt?: {
+    seconds: number;
+    nanoseconds: number;
+  };
+  notes?: string;
+  paymentMethod?: string;
+  paymentStatus?: string;
+  discountApplied?: boolean;
+  totalPrice?: number;
+}
 
-  const [formData, setFormData] = useState({
-    email: '',
-    displayName: '',
-    role: 'staff',
-    imageUrl: ''
+const StaffAppointmentsDashboard = () => {
+  const { currentUser, userData } = useAuth();
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedFilter, setSelectedFilter] = useState<'today' | 'upcoming' | 'past' | 'all'>('today');
+  const [expandedAppointment, setExpandedAppointment] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState('');
+
+  // Obtener las citas del staff
+  useEffect(() => {
+    if (!currentUser || !userData) return;
+
+    const fetchAppointments = async () => {
+      try {
+        setLoading(true);
+        
+        const q = query(
+          collection(db, 'appointments'),
+          where('staffId', '==', userData.uid),
+          orderBy('date', 'asc')
+        );
+
+        const querySnapshot = await getDocs(q);
+        const appointmentsData: Appointment[] = [];
+
+        querySnapshot.forEach((doc) => {
+          const data = doc.data();
+          appointmentsData.push({
+            id: doc.id,
+            userId: data.userId,
+            userEmail: data.userEmail,
+            userName: data.userName,
+            userPhone: data.userPhone,
+            services: data.services || [],
+            staffId: data.staffId,
+            staffName: data.staffName,
+            date: data.date.toDate(),
+            status: data.status || 'booked',
+            createdAt: data.createdAt.toDate(),
+            notes: data.notes,
+            paymentMethod: data.paymentMethod,
+            paymentStatus: data.paymentStatus,
+            discountApplied: data.discountApplied,
+            totalPrice: data.totalPrice
+          });
+        });
+
+        setAppointments(appointmentsData);
+      } catch (error) {
+        console.error('Error al obtener citas:', error);
+        toast.error('Error al cargar citas');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchAppointments();
+  }, [currentUser, userData]);
+
+  const calculateDiscountedPrice = (appointment: Appointment) => {
+    const basePrice = appointment.totalPrice || 
+                     appointment.services.reduce((sum, service) => sum + service.price, 0);
+    
+    if (appointment.discountApplied && appointment.paymentMethod === 'web') {
+      return basePrice * 0.85; // Aplica 15% de descuento
+    }
+    return basePrice;
+  };
+
+  // Filtrar citas
+  const filteredAppointments = appointments.filter((appointment) => {
+    const now = new Date();
+    const appointmentDate = new Date(appointment.date);
+    const matchesFilter = () => {
+      switch (selectedFilter) {
+        case 'today':
+          return isToday(appointmentDate);
+        case 'upcoming':
+          return isFuture(appointmentDate) && !isToday(appointmentDate);
+        case 'past':
+          return isPast(appointmentDate) && !isToday(appointmentDate);
+        default:
+          return true;
+      }
+    };
+
+    const matchesSearch = appointment.userName.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                         (appointment.services.length > 0 && 
+                          appointment.services.some(service => 
+                            service.name.toLowerCase().includes(searchTerm.toLowerCase())));
+
+    return matchesFilter() && matchesSearch;
   });
 
-  useEffect(() => {
-    fetchStaff();
-  }, []);
+  // Formatear fechas
+  const formatDate = (date: Date) => {
+    if (isToday(date)) return 'Hoy';
+    if (isTomorrow(date)) return 'Mañana';
+    return format(date, 'PPP', { locale: es });
+  };
 
-  const fetchStaff = async () => {
+  const formatTime = (date: Date) => format(date, 'hh:mm a', { locale: es });
+
+  // Cambiar estado de la cita
+  const updateAppointmentStatus = async (appointmentId: string, newStatus: string) => {
     try {
-      const querySnapshot = await getDocs(collection(db, 'staff'));
-      const staffData: Staff[] = [];
-      
-      querySnapshot.forEach((doc) => {
-        staffData.push({
-          id: doc.id,
-          ...doc.data()
-        } as Staff);
+      await updateDoc(doc(db, 'appointments', appointmentId), {
+        status: newStatus,
+        updatedAt: new Date()
       });
       
-      setStaff(staffData);
+      setAppointments(appointments.map(app => 
+        app.id === appointmentId ? { ...app, status: newStatus } : app
+      ));
+      
+      toast.success(`Cita ${newStatus === 'completed' ? 'completada' : 'cancelada'} con éxito`);
     } catch (error) {
-      console.error('Error fetching staff:', error);
-      toast.error('Failed to load staff');
-      // Use placeholder data if fetching fails
-      setStaff(placeholderStaff as Staff[]);
-    } finally {
-      setLoading(false);
+      console.error('Error al actualizar cita:', error);
+      toast.error('Error al actualizar el estado');
     }
   };
 
-  const openAddModal = () => {
-    setFormData({
-      email: '',
-      displayName: '',
-      role: 'staff',
-      imageUrl: ''
-    });
-    setImageFile(null);
-    setImagePreview('');
-    setIsEditing(false);
-    setShowModal(true);
-  };
-
-  const openEditModal = (staff: Staff) => {
-    setFormData({
-      email: staff.email,
-      displayName: staff.displayName,
-      role: staff.role,
-      imageUrl: staff.imageUrl
-    });
-    setCurrentStaff(staff);
-    setImagePreview(staff.imageUrl);
-    setIsEditing(true);
-    setShowModal(true);
-  };
-
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    const { name, value } = e.target;
-    
-    if (name === 'role') {
-      setFormData({
-        ...formData,
-        [name]: value
-      });
-    } else {
-      setFormData({
-        ...formData,
-        [name]: value
-      });
-    }
-  };
-
-  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0];
-      setImageFile(file);
-      
-      // Preview image
-      const reader = new FileReader();
-      reader.onload = () => {
-        setImagePreview(reader.result as string);
-      };
-      reader.readAsDataURL(file);
-    }
-  };
-
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    
-    if (!formData.email || !formData.displayName || !formData.role) {
-      toast.error('Please fill all required fields');
-      return;
-    }
-    
-    if (!isEditing && !imageFile && !formData.imageUrl) {
-      toast.error('Please upload an image');
-      return;
-    }
-    
-    setFormLoading(true);
-    
-    try {
-      let imageUrl = formData.imageUrl;
-      
-      // Upload image if a new one is selected
-      if (imageFile) {
-        const storageRef = ref(storage, `staff/${Date.now()}_${imageFile.name}`);
-        await uploadBytes(storageRef, imageFile);
-        imageUrl = await getDownloadURL(storageRef);
-      }
-      
-      if (isEditing && currentStaff) {
-        // Update existing staff
-        await updateDoc(doc(db, 'staff', currentStaff.id), {
-          displayName: formData.displayName,
-          email: formData.email,
-          role: formData.role,
-          imageUrl: imageUrl,
-          updatedAt: serverTimestamp()
-        });
-        
-        toast.success('Staff updated successfully');
-        
-        // Update local state
-        setStaff(staff.map(staff => 
-          staff.id === currentStaff.id 
-            ? { ...staff, ...formData, imageUrl } 
-            : staff
-        ));
-      } else {
-        // Add new staff
-        const newStaff = {
-          displayName: formData.displayName,
-          email: formData.email,
-          role: formData.role,
-          imageUrl: imageUrl,
-          createdAt: serverTimestamp()
-        };
-        
-        const docRef = await addDoc(collection(db, 'staff'), newStaff);
-        
-        toast.success('Staff added successfully');
-        
-        // Update local state        
-        setStaff([...staff, {
-            id: docRef.id, ...newStaff,
-            price: 0,
-            duration: 0
-        }]);        
-      }
-      
-      // Close modal and reset form
-      setShowModal(false);
-      setFormData({
-        email: '',
-        displayName: '',
-        role: 'staff',
-        imageUrl: ''
-      });
-      setImageFile(null);
-      setImagePreview('');
-    } catch (error) {
-      console.error('Error saving staff:', error);
-      toast.error('Failed to save staff');
-    } finally {
-      setFormLoading(false);
-    }
-  };
-
-  const handleDelete = async (id: string) => {
-    if (window.confirm('Are you sure you want to delete this staff? This action cannot be undone.')) {
-      setDeleteId(id);
-      
-      try {
-        // Get staff to check for image URL
-        const staffDoc = await getDoc(doc(db, 'staff', id));
-        
-        if (staffDoc.exists()) {
-          const staffData = staffDoc.data();
-          
-          // Delete document
-          await deleteDoc(doc(db, 'staff', id));
-          
-          // Delete image from storage if exists and is stored in Firebase
-          if (staffData.imageUrl && staffData.imageUrl.includes('firebasestorage')) {
-            const imageRef = ref(storage, staffData.imageUrl);
-            await deleteObject(imageRef);
-          }
-          
-          // Update local state
-          setStaff(staff.filter(staff => staff.id !== id));
-          
-          toast.success('Staff deleted successfully');
-        }
-      } catch (error) {
-        console.error('Error deleting staff:', error);
-        toast.error('Failed to delete staff');
-      } finally {
-        setDeleteId(null);
-      }
+  // Función para imprimir el turno
+  const printAppointment = (appointment: Appointment) => {
+    const printWindow = window.open('', '_blank');
+    if (printWindow) {
+      printWindow.document.write(`
+        <html>
+          <head>
+            <title>Turno ${appointment.services[0]?.name || 'Servicio'}</title>
+            <style>
+              @import url('https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&display=swap');
+              
+              body { 
+                font-family: 'Quicksand', sans-serif;
+                background-color: #f2f5e9;
+                padding: 20px;
+                color: #1F1F1F;
+              }
+              
+              .ticket-container {
+                max-width: 380px;
+                margin: 0 auto;
+                background: white;
+                border-radius: 16px;
+                overflow: hidden;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+              }
+              
+              .ticket-header {
+                background: linear-gradient(135deg, #0C9383 0%, #01f891 100%);
+                padding: 20px;
+                text-align: center;
+                color: white;
+                position: relative;
+              }
+              
+              .ticket-header::after {
+                content: "";
+                position: absolute;
+                bottom: -15px;
+                left: 0;
+                right: 0;
+                height: 30px;
+                background: white;
+                border-radius: 50% 50% 0 0 / 30px 30px 0 0;
+              }
+              
+              .ticket-title {
+                font-size: 24px;
+                font-weight: 700;
+                margin-bottom: 5px;
+                text-transform: uppercase;
+                letter-spacing: 1px;
+              }
+              
+              .ticket-subtitle {
+                font-size: 14px;
+                opacity: 0.9;
+              }
+              
+              .ticket-body {
+                padding: 30px 25px;
+                position: relative;
+              }
+              
+              .ticket-logo {
+                position: absolute;
+                top: -25px;
+                right: 20px;
+                width: 50px;
+                height: 50px;
+                background: white;
+                border-radius: 50%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+                z-index: 2;
+              }
+              
+              .ticket-details {
+                margin-bottom: 25px;
+              }
+              
+              .detail-row {
+                display: flex;
+                justify-content: space-between;
+                margin-bottom: 12px;
+                padding-bottom: 12px;
+                border-bottom: 1px dashed #e0e0e0;
+              }
+              
+              .detail-label {
+                font-weight: 600;
+                color: #0C9383;
+                flex: 1;
+              }
+              
+              .detail-value {
+                flex: 1;
+                text-align: right;
+                font-weight: 500;
+              }
+              
+              .ticket-qr {
+                text-align: center;
+                margin: 20px 0;
+                padding: 15px;
+                background: #f8f8f8;
+                border-radius: 8px;
+              }
+              
+              .ticket-footer {
+                text-align: center;
+                padding-top: 20px;
+                border-top: 1px solid #e0e0e0;
+                font-size: 12px;
+                color: #666;
+              }
+              
+              .ticket-number {
+                background: #f2f5e9;
+                padding: 8px 15px;
+                border-radius: 20px;
+                display: inline-block;
+                font-weight: 700;
+                color: #0C9383;
+                margin-bottom: 15px;
+              }
+              
+              .watermark {
+                position: absolute;
+                bottom: 10px;
+                right: 10px;
+                opacity: 0.1;
+                font-size: 60px;
+                font-weight: 700;
+                color: #0C9383;
+                transform: rotate(-15deg);
+              }
+              
+              .payment-badge {
+                display: inline-block;
+                padding: 2px 8px;
+                border-radius: 12px;
+                font-size: 12px;
+                font-weight: 600;
+                margin-left: 8px;
+              }
+              
+              .payment-web {
+                background-color: #dcfce7;
+                color: #166534;
+              }
+              
+              .payment-onsite {
+                background-color: #fef9c3;
+                color: #854d0e;
+              }
+              
+              @media print {
+                body {
+                  background: white !important;
+                }
+                .ticket-container {
+                  box-shadow: none;
+                }
+              }
+            </style>
+          </head>
+          <body>
+            <div class="ticket-container">
+              <div class="ticket-header">
+                <div class="ticket-title">${appointment.services[0]?.name || 'Servicio'}</div>
+                <div class="ticket-subtitle">Turno ${appointment.status === 'completed' ? 'Completado' : 'Confirmado'}</div>
+              </div>
+              
+              <div class="ticket-body">
+                <div class="ticket-logo">
+                  <svg width="30" height="30" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="#0C9383"/>
+                  </svg>
+                </div>
+                
+                <div class="ticket-number">
+                  #${appointment.id.slice(0, 8).toUpperCase()}
+                </div>
+                
+                <div class="ticket-details">
+                  <div class="detail-row">
+                    <span class="detail-label">Cliente:</span>
+                    <span class="detail-value">${appointment.userName}</span>
+                  </div>
+                  <div class="detail-row">
+                    <span class="detail-label">Fecha:</span>
+                    <span class="detail-value">${formatDate(appointment.date)}</span>
+                  </div>
+                  <div class="detail-row">
+                    <span class="detail-label">Hora:</span>
+                    <span class="detail-value">${formatTime(appointment.date)}</span>
+                  </div>
+                  ${appointment.services.map(service => `
+                    <div class="detail-row">
+                      <span class="detail-label">Servicio:</span>
+                      <span class="detail-value">${service.name}</span>
+                    </div>
+                    <div class="detail-row">
+                      <span class="detail-label">Duración:</span>
+                      <span class="detail-value">${service.duration} min</span>
+                    </div>
+                    <div class="detail-row">
+                      <span class="detail-label">Precio:</span>
+                      <span class="detail-value">$${service.price}</span>
+                    </div>
+                  `).join('')}
+                  <div class="detail-row">
+                    <span class="detail-label">Total:</span>
+                    <span class="detail-value">${calculateDiscountedPrice(appointment)}</span>
+                  </div>
+                  <div class="detail-row">
+                    <span class="detail-label">Pago:</span>
+                    <span class="detail-value">
+                      ${appointment.paymentMethod === 'web' ? 'Online' : 'En sitio'}
+                      ${appointment.discountApplied ? ' (15% desc)' : ''}
+                    </span>
+                  </div>
+                  <div class="detail-row">
+                    <span class="detail-label">Estado pago:</span>
+                    <span class="detail-value">
+                      ${appointment.paymentStatus === 'paid' ? 'Pagado' : 'Pendiente'}
+                    </span>
+                  </div>
+                </div>
+                
+                <div class="ticket-qr">
+                  <div style="margin-bottom: 10px;">Presentar este código al llegar</div>
+                  <svg width="120" height="120" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="120" height="120" fill="#f2f5e9"/>
+                    <rect x="10" y="10" width="20" height="20" fill="#0C9383"/>
+                    <rect x="40" y="10" width="20" height="20" fill="#0C9383"/>
+                    <rect x="70" y="10" width="20" height="20" fill="#0C9383"/>
+                    <rect x="10" y="40" width="20" height="20" fill="#0C9383"/>
+                    <rect x="40" y="40" width="20" height="20" fill="#f2f5e9"/>
+                    <rect x="70" y="40" width="20" height="20" fill="#0C9383"/>
+                    <rect x="10" y="70" width="20" height="20" fill="#0C9383"/>
+                    <rect x="40" y="70" width="20" height="20" fill="#0C9383"/>
+                    <rect x="70" y="70" width="20" height="20" fill="#0C9383"/>
+                    <rect x="90" y="10" width="20" height="20" fill="#01f891"/>
+                    <rect x="90" y="40" width="20" height="20" fill="#01f891"/>
+                    <rect x="90" y="70" width="20" height="20" fill="#01f891"/>
+                    <rect x="10" y="90" width="20" height="20" fill="#01f891"/>
+                    <rect x="40" y="90" width="20" height="20" fill="#01f891"/>
+                    <rect x="70" y="90" width="20" height="20" fill="#01f891"/>
+                  </svg>
+                </div>
+                
+                <div class="ticket-footer">
+                  <div style="margin-bottom: 8px; font-weight: 600;">Gracias por elegir nuestros servicios</div>
+                  <div>Por favor llegue 10 minutos antes de su cita</div>
+                </div>
+                
+                <div class="watermark">SERENITY</div>
+              </div>
+            </div>
+            
+            <script>
+              setTimeout(() => {
+                window.print();
+                window.close();
+              }, 200);
+            </script>
+          </body>
+        </html>
+      `);
+      printWindow.document.close();
     }
   };
 
   return (
-    <div className="min-h-screen pt-24 pb-12">      
-      <div className="max-w-7xl mx-auto px-4 sm:px-6">
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8">          
-          <div>
-            <h1 className="section-title mb-2">Manage Staff</h1>
-            <p className="text-secondary-600">Add, edit, or delete staff members</p>
+    <div className="min-h-screen pt-24 pb-12 bg-gray-50">
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+        {/* Header */}
+        <div className="mb-8">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+              <h1 className="text-3xl font-bold text-gray-900 mb-2">
+                Mis Turnos
+                <span className="ml-2 text-sm font-normal bg-[#0C9383] text-white px-2 py-1 rounded-full">
+                  {filteredAppointments.length}
+                </span>
+              </h1>
+              <p className="text-gray-600">Gestiona tus citas programadas</p>
+            </div>
+            
+            <div className="relative w-full md:w-64">
+              <input
+                type="text"
+                placeholder="Buscar por cliente o servicio..."
+                className="w-full pl-10 pr-4 py-2 rounded-full border border-gray-300 focus:ring-2 focus:ring-[#0C9383] focus:border-transparent"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+              />
+              <div className="absolute left-3 top-2.5 text-gray-400">
+                <User size={18} />
+              </div>
+            </div>
           </div>
-          <button 
-            onClick={openAddModal}
-            className="btn-primary mt-4 md:mt-0 flex items-center"
-          >
-            <PlusCircle size={18} className="mr-2" />
-            Add New Staff
-          </button>
         </div>
 
-        {loading ? (
-          <div className="text-center py-12">
-            <div className="animate-spin mx-auto mb-4">
-              <svg className="w-8 h-8 text-primary-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">                
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>                
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-              </svg>
-            </div>
-            <p className="text-secondary-600">Loading staff...</p>
+        {/* Filtros y estadísticas */}
+        <div className="mb-6">
+          <div className="flex flex-wrap gap-2 mb-4">
+            {['today', 'upcoming', 'past', 'all'].map((filter) => (
+              <button
+                key={filter}
+                onClick={() => setSelectedFilter(filter as 'today' | 'upcoming' | 'past' | 'all')}
+                className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${
+                  selectedFilter === filter
+                    ? 'bg-[#0C9383] text-white'
+                    : 'bg-white text-gray-700 hover:bg-gray-100'
+                }`}
+              >
+                {filter === 'today' && 'Hoy'}
+                {filter === 'upcoming' && 'Próximas'}
+                {filter === 'past' && 'Pasadas'}
+                {filter === 'all' && 'Todas'}
+              </button>
+            ))}
           </div>
-        ) : staff.length === 0 ? (
-          <div className="text-center py-12 bg-white rounded-xl shadow-sm">
-            <Scissors size={48} className="mx-auto text-secondary-400 mb-4" />
-            <h3 className="text-xl font-medium text-secondary-800 mb-2">No Staff Found</h3>
-            <p className="text-secondary-600 mb-6">You haven't added any staff yet. Get started by adding your first staff member.</p>
-            <button 
-              onClick={openAddModal}
-              className="btn-primary"
-            >
-              Add Your First Staff
-            </button>
+          
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+            <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
+              <div className="flex items-center justify-between">
+                <span className="text-gray-600">Total</span>
+                <span className="text-lg font-bold">{appointments.length}</span>
+              </div>
+            </div>
+            <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
+              <div className="flex items-center justify-between">
+                <span className="text-gray-600">Hoy</span>
+                <span className="text-lg font-bold">
+                  {appointments.filter(app => isToday(app.date)).length}
+                </span>
+              </div>
+            </div>
+            <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
+              <div className="flex items-center justify-between">
+                <span className="text-gray-600">Completadas</span>
+                <span className="text-lg font-bold">
+                  {appointments.filter(app => app.status === 'completed').length}
+                </span>
+              </div>
+            </div>
+            <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
+              <div className="flex items-center justify-between">
+                <span className="text-gray-600">Canceladas</span>
+                <span className="text-lg font-bold">
+                  {appointments.filter(app => app.status === 'cancelled').length}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Lista de citas */}
+        {loading ? (
+          <div className="flex justify-center items-center h-64">
+            <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#0C9383]"></div>
+          </div>
+        ) : filteredAppointments.length === 0 ? (
+          <div className="bg-white rounded-xl shadow-sm p-8 text-center">
+            <Calendar className="mx-auto h-12 w-12 text-gray-400 mb-4" />
+            <h3 className="text-lg font-medium text-gray-700 mb-2">
+              No hay citas {selectedFilter === 'today' ? 'para hoy' : 
+              selectedFilter === 'upcoming' ? 'próximas' : 
+              selectedFilter === 'past' ? 'pasadas' : 'registradas'}
+            </h3>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">            
-            {staff.map((staff) => (              
-              <div key={staff.id} className="bg-white rounded-xl shadow-sm overflow-hidden">                
-                <div className="relative h-48">
-                  <img 
-                    src={staff.imageUrl}
-                    alt={staff.displayName}
-                    className="w-full h-full object-cover"
-                  />
-                  <div className="absolute top-0 right-0 p-2 flex space-x-2">
-                    <button 
-                      onClick={() => openEditModal(staff)}
-                      className="p-2 bg-white rounded-full shadow hover:bg-primary-50 transition-colors"
-                    >
-                      <Edit size={16} className="text-primary-600" />
-                    </button>
-                    <button 
-                      onClick={() => handleDelete(staff.id)}
-                      className="p-2 bg-white rounded-full shadow hover:bg-error-50 transition-colors"
-                      disabled={deleteId === staff.id}
-                    >
-                      {deleteId === staff.id ? (
-                        <Loader2 size={16} className="text-error-600 animate-spin" />
-                      ) : (
-                        <Trash size={16} className="text-error-600" />
-                      )}
-                    </button>
-                  </div>
-                </div>
-                
-                {/* Edit Staff Modal */}
-                {showModal && (
-                  <div className="fixed inset-0 bg-secondary-900/50 flex items-center justify-center z-50 p-4">                    
-                    <div className="bg-white rounded-xl shadow-lg max-w-2xl w-full max-h-[90vh] overflow-auto">
-                      <div className="flex justify-between items-center p-6 border-b border-secondary-200">
-                        <h3 className="text-xl font-semibold text-secondary-900">
-                          {isEditing ? 'Edit Staff' : 'Add New Staff'}
-                        </h3>
-                        <button 
-                          onClick={() => setShowModal(false)}
-                          className="text-secondary-500 hover:text-secondary-700"
-                          disabled={formLoading}
-                        >
-                          <X size={24} />
-                        </button>
-                      </div>
-                      
-                      <form onSubmit={handleSubmit} className="p-6">
-                        <div className="form-group">
-                          <label htmlFor="email" className="form-label">Email</label>
-                          <input
-                            type="email"
-                            id="email"
-                            name="email"
-                            value={formData.email}
-                            onChange={handleInputChange}
-                            className="form-input"
-                            placeholder="Enter your email"
-                            disabled={formLoading}
-                            required
-                          />
-                        </div>
-                        
-                        <div className="form-group">
-                          <label htmlFor="displayName" className="form-label">Display Name</label>
-                          <input
-                            type="text"
-                            id="displayName"
-                            name="displayName"
-                            value={formData.displayName}
-                            onChange={handleInputChange}
-                            className="form-input"
-                            placeholder="Enter your display name"
-                            disabled={formLoading}
-                            required
-                          />
-                        </div>
-                        
-                        <div className="form-group">
-                          <label htmlFor="role" className="form-label">Role</label>
-                          <select
-                            id="role"
-                            name="role"
-                            value={formData.role}
-                            onChange={(e) => setFormData({ ...formData, role: e.target.value })}
-                            className="form-select"
-                            disabled={formLoading}
-                            required
-                          >
-                            <option value="staff">Staff</option>
-                          </select>
-                        </div>
-                        
-                        <div className="form-group">
-                          <label className="form-label">Staff Image</label>
-                          <div className="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-secondary-300 border-dashed rounded-md">
-                            {imagePreview ? (
-                              <div className="text-center">
-                                <img 
-                                  src={imagePreview}
-                                  alt="Preview"
-                                  className="mx-auto h-48 object-cover mb-4"
-                                />
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setImagePreview('');
-                                    setImageFile(null);
-                                    setFormData({ ...formData, imageUrl: '' });
-                                  }}
-                                  className="text-error-600 hover:text-error-800 text-sm font-medium"
-                                  disabled={formLoading}
-                                >
-                                  Remove Image
-                                </button>
-                              </div>
-                            ) : (
-                              <div className="space-y-1 text-center">
-                                <Upload className="mx-auto h-12 w-12 text-secondary-400" />
-                                <div className="flex text-sm text-secondary-600">
-                                  <label
-                                    htmlFor="image-upload"
-                                    className="relative cursor-pointer bg-white rounded-md font-medium text-primary-600 hover:text-primary-700"
-                                  >
-                                    <span>Upload a file</span>
-                                    <input
-                                      id="image-upload"
-                                      name="image-upload"
-                                      type="file"
-                                      className="sr-only"
-                                      accept="image/*"
-                                      onChange={handleImageChange}
-                                      disabled={formLoading}
-                                    />
-                                  </label>
-                                  <p className="pl-1">or drag and drop</p>
-                                </div>
-                                <p className="text-xs text-secondary-500">
-                                  PNG, JPG, GIF up to 10MB
-                                </p>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                        
-                        {!isEditing && !imageFile && !formData.imageUrl && (
-                          <div className="text-sm mb-4">
-                            <p className="text-secondary-700">
-                              Don't have an image? You can use a direct URL to an image:
-                            </p>
-                            <input
-                              type="url"
-                              id="imageUrl"
-                              name="imageUrl"
-                              value={formData.imageUrl}
-                              onChange={handleInputChange}
-                              className="form-input mt-2"
-                              placeholder="https://example.com/image.jpg"
-                              disabled={formLoading}
-                            />
-                          </div>
+          <div className="space-y-4">
+            {filteredAppointments.map((appointment) => (
+              <motion.div
+                key={appointment.id}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-white rounded-lg shadow-sm overflow-hidden border border-gray-200"
+              >
+                <div 
+                  className="p-4 flex justify-between items-center cursor-pointer hover:bg-gray-50"
+                  onClick={() => setExpandedAppointment(
+                    expandedAppointment === appointment.id ? null : appointment.id
+                  )}
+                >
+                  <div className="flex items-center space-x-4">
+                    <div className={`p-3 rounded-lg ${
+                      appointment.status === 'completed' ? 'bg-green-50 text-green-600' :
+                      appointment.status === 'cancelled' ? 'bg-gray-100 text-gray-500' :
+                      isToday(appointment.date) ? 'bg-blue-50 text-blue-600' : 'bg-orange-50 text-orange-600'
+                    }`}>
+                      <Calendar size={20} />
+                    </div>
+                    <div>
+                      <h3 className="font-medium">
+                        {appointment.services[0]?.name || 'Servicio'}
+                        {appointment.services.length > 1 && ` +${appointment.services.length - 1}`}
+                      </h3>
+                      <div className="flex items-center space-x-2 text-sm text-gray-500 mt-1">
+                        <span>{formatDate(appointment.date)}</span>
+                        <span>•</span>
+                        <span>{formatTime(appointment.date)}</span>
+                        <span>•</span>
+                        <span>
+                          {appointment.services.reduce((sum, service) => sum + service.duration, 0)} min
+                        </span>
+                        {appointment.paymentMethod && (
+                          <span className={`text-xs px-2 py-0.5 rounded-full ${
+                            appointment.paymentMethod === 'web' 
+                              ? 'bg-green-100 text-green-800' 
+                              : 'bg-yellow-100 text-yellow-800'
+                          }`}>
+                            {appointment.paymentMethod === 'web' ? 'Online' : 'En sitio'}
+                            {appointment.discountApplied && ' (15% off)'}
+                          </span>
                         )}
-                        
-                        <div className="flex justify-end space-x-4 mt-6">                          
-                          <button                          
-                            type="button"
-                            onClick={() => setShowModal(false)}
-                            className="btn-secondary"
-                            disabled={formLoading}
-                          >
-                            Cancel
-                          </button>
-                          <button
-                            type="submit"
-                            className="btn-primary"
-                            disabled={formLoading}
-                          >
-                            {formLoading ? (
-                              <>
-                                <Loader2 size={18} className="animate-spin mr-2" />
-                                {isEditing ? 'Updating...' : 'Creating...'}
-                              </>
-                            ) : (
-                              <>{isEditing ? 'Update Staff' : 'Create Staff'}</>
-                            )}
-                          </button>
-                        </div>
-                      </form>
+                      </div>
                     </div>
                   </div>
-                )}
-              </div>
+                  <div className="flex items-center space-x-3">
+                    <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                      appointment.status === 'completed' ? 'bg-green-100 text-green-800' :
+                      appointment.status === 'cancelled' ? 'bg-gray-100 text-gray-800' :
+                      'bg-blue-100 text-blue-800'
+                    }`}>
+                      {appointment.status === 'completed' ? 'Completado' :
+                       appointment.status === 'cancelled' ? 'Cancelado' :
+                       isToday(appointment.date) ? 'Hoy' : 'Confirmado'}
+                    </span>
+                    {expandedAppointment === appointment.id ? (
+                      <ChevronUp className="text-gray-400" size={20} />
+                    ) : (
+                      <ChevronDown className="text-gray-400" size={20} />
+                    )}
+                  </div>
+                </div>
+
+                <AnimatePresence>
+                  {expandedAppointment === appointment.id && (
+                    <motion.div
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: 'auto', opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      transition={{ duration: 0.2 }}
+                    >
+                      <div className="px-4 pb-4 border-t border-gray-200">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
+                          {/* Detalles del servicio */}
+                          <div>
+                            <h4 className="text-md font-medium text-gray-500 mb-3 flex items-center">
+                              <Info className="mr-2" size={18} />
+                              Detalles del servicio
+                            </h4>
+                            <div className="space-y-3">
+                              {appointment.services.map((service, index) => (
+                                <div key={index} className="mb-4">
+                                  <div className="flex justify-between mb-1">
+                                    <span className="text-gray-500 flex items-center">
+                                      <Clock className="mr-2" size={16} />
+                                      Servicio {index + 1}:
+                                    </span>
+                                    <span className="font-medium">{service.name}</span>
+                                  </div>
+                                  <div className="flex justify-between">
+                                    <span className="text-gray-500 flex items-center pl-6">
+                                      Duración:
+                                    </span>
+                                    <span className="font-medium">{service.duration} min</span>
+                                  </div>
+                                  <div className="flex justify-between">
+                                    <span className="text-gray-500 flex items-center pl-6">
+                                      Precio:
+                                    </span>
+                                    <span className="font-medium">${service.price}</span>
+                                  </div>
+                                </div>
+                              ))}
+                              <div className="flex justify-between pt-2 border-t border-gray-200">
+                                <span className="text-gray-500 flex items-center">
+                                  <DollarSign className="mr-2" size={16} />
+                                  Total:
+                                </span>
+                                <span className="font-medium">
+                                  ${calculateDiscountedPrice(appointment)}
+                                </span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-gray-500 flex items-center">
+                                  <DollarSign className="mr-2" size={16} />
+                                  Método pago:
+                                </span>
+                                <span className="font-medium">
+                                  {appointment.paymentMethod === 'web' ? 'Online' : 'En sitio'}
+                                  {appointment.discountApplied && ' (con descuento)'}
+                                </span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-gray-500 flex items-center">
+                                  <DollarSign className="mr-2" size={16} />
+                                  Estado pago:
+                                </span>
+                                <span className="font-medium">
+                                  {appointment.paymentStatus === 'paid' ? 'Pagado' : 'Pendiente'}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Información del cliente */}
+                          <div>
+                            <h4 className="text-md font-medium text-gray-500 mb-3 flex items-center">
+                              <User className="mr-2" size={18} />
+                              Información del cliente
+                            </h4>
+                            <div className="space-y-3">
+                              <div className="flex justify-between">
+                                <span className="text-gray-500 flex items-center">
+                                  <User className="mr-2" size={16} />
+                                  Nombre:
+                                </span>
+                                <span className="font-medium">{appointment.userName}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-gray-500 flex items-center">
+                                  <Mail className="mr-2" size={16} />
+                                  Email:
+                                </span>
+                                <a href={`mailto:${appointment.userEmail}`} className="font-medium text-blue-600 hover:underline">
+                                  {appointment.userEmail}
+                                </a>
+                              </div>
+                              {appointment.userPhone && (
+                                <div className="flex justify-between">
+                                  <span className="text-gray-500 flex items-center">
+                                    <Phone className="mr-2" size={16} />
+                                    Teléfono:
+                                  </span>
+                                  <a href={`tel:${appointment.userPhone}`} className="font-medium text-blue-600 hover:underline">
+                                    {appointment.userPhone}
+                                  </a>
+                                </div>
+                              )}
+                              <div className="flex justify-between">
+                                <span className="text-gray-500 flex items-center">
+                                  <Calendar className="mr-2" size={16} />
+                                  Reservado el:
+                                </span>
+                                <span className="font-medium">
+                                  {format(appointment.createdAt, 'PPPp', { locale: es })}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Notas */}
+                        {appointment.notes && (
+                          <div className="mt-4">
+                            <h4 className="text-sm font-medium text-gray-500 mb-2 flex items-center">
+                              <Info className="mr-2" size={16} />
+                              Notas adicionales
+                            </h4>
+                            <p className="text-gray-700 bg-gray-50 p-3 rounded-lg">
+                              {appointment.notes}
+                            </p>
+                          </div>
+                        )}
+
+                        {/* Acciones */}
+                        <div className="mt-6 pt-4 border-t border-gray-200">
+                          <h4 className="text-sm font-medium text-gray-500 mb-3">Acciones</h4>
+                          <div className="flex flex-wrap gap-3">
+                            <button
+                              onClick={() => printAppointment(appointment)}
+                              className="flex items-center px-4 py-2 bg-gray-100 text-gray-800 rounded-lg text-sm font-medium hover:bg-gray-200"
+                            >
+                              <Printer className="mr-2" size={16} />
+                              Imprimir Turno
+                            </button>
+                            
+                            {appointment.paymentMethod === 'onsite' && appointment.paymentStatus !== 'paid' && (
+                              <button
+                                onClick={() => updateDoc(doc(db, 'appointments', appointment.id), {
+                                  paymentStatus: 'paid',
+                                  updatedAt: new Date()
+                                }).then(() => {
+                                  setAppointments(appointments.map(app => 
+                                    app.id === appointment.id ? { ...app, paymentStatus: 'paid' } : app
+                                  ));
+                                  toast.success('Pago marcado como completado');
+                                })}
+                                className="flex items-center px-4 py-2 bg-green-100 text-green-800 rounded-lg text-sm font-medium hover:bg-green-200"
+                              >
+                                <CheckCircle className="mr-2" size={16} />
+                                Marcar como Pagado
+                              </button>
+                            )}
+                            
+                            {(isToday(appointment.date) || isFuture(appointment.date)) && appointment.status === 'booked' && (
+                              <>
+                                <button
+                                  onClick={() => updateAppointmentStatus(appointment.id, 'completed')}
+                                  className="flex items-center px-4 py-2 bg-green-100 text-green-800 rounded-lg text-sm font-medium hover:bg-green-200"
+                                >
+                                  <CheckCircle className="mr-2" size={16} />
+                                  Completar
+                                </button>
+                                <button
+                                  onClick={() => updateAppointmentStatus(appointment.id, 'cancelled')}
+                                  className="flex items-center px-4 py-2 bg-red-100 text-red-800 rounded-lg text-sm font-medium hover:bg-red-200"
+                                >
+                                  <XCircle className="mr-2" size={16} />
+                                  Cancelar
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </motion.div>
             ))}
           </div>
         )}
       </div>
-
-      {/* Add/Edit Staff Modal */}
-      {showModal && (
-        <div className="fixed inset-0 bg-secondary-900/50 flex items-center justify-center z-50 p-4">          
-          <div className="bg-white rounded-xl shadow-lg max-w-2xl w-full max-h-[90vh] overflow-auto">
-            <div className="flex justify-between items-center p-6 border-b border-secondary-200">              
-              <h3 className="text-xl font-semibold text-secondary-900">                
-                {isEditing ? 'Edit Staff' : 'Add New Staff'}                
-              </h3>
-              <button 
-                onClick={() => setShowModal(false)}
-                className="text-secondary-500 hover:text-secondary-700"
-                disabled={formLoading}
-              >
-                <X size={24} />
-              </button>
-            </div>
-            
-            <form onSubmit={handleSubmit} className="p-6">
-              <div className="form-group">
-                <label htmlFor="email" className="form-label">Email</label>
-                <input
-                  type="email"
-                  id="email"
-                  name="email"
-                  value={formData.email}
-                  onChange={handleInputChange}
-                  className="form-input"
-                  placeholder="Enter your email"
-                  disabled={formLoading}
-                  required
-                />
-              </div>
-              
-              <div className="form-group">
-                <label htmlFor="displayName" className="form-label">Display Name</label>
-                <input
-                  type="text"
-                  id="displayName"
-                  name="displayName"
-                  value={formData.displayName}
-                  onChange={handleInputChange}
-                  className="form-input"
-                  placeholder="Enter your display name"
-                  disabled={formLoading}
-                  required
-                />
-              </div>
-              
-              <div className="form-group">
-                <label htmlFor="role" className="form-label">Role</label>
-                <select
-                  id="role"
-                  name="role"
-                  value={formData.role}
-                  onChange={(e) => setFormData({ ...formData, role: e.target.value })}
-                  className="form-select"
-                  disabled={formLoading}
-                  required
-                >
-                  <option value="staff">Staff</option>
-                </select>
-              </div>
-              
-              <div className="form-group">
-                <label className="form-label">Staff Image</label>
-                <div className="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-secondary-300 border-dashed rounded-md">
-                  {imagePreview ? (
-                    <div className="text-center">
-                      <img 
-                        src={imagePreview}
-                        alt="Preview"
-                        className="mx-auto h-48 object-cover mb-4"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setImagePreview('');
-                          setImageFile(null);
-                          setFormData({ ...formData, imageUrl: '' });
-                        }}
-                        className="text-error-600 hover:text-error-800 text-sm font-medium"
-                        disabled={formLoading}
-                      >
-                        Remove Image
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="space-y-1 text-center">
-                      <Upload className="mx-auto h-12 w-12 text-secondary-400" />
-                      <div className="flex text-sm text-secondary-600">
-                        <label
-                          htmlFor="image-upload"
-                          className="relative cursor-pointer bg-white rounded-md font-medium text-primary-600 hover:text-primary-700"
-                        >
-                          <span>Upload a file</span>
-                          <input
-                            id="image-upload"
-                            name="image-upload"
-                            type="file"
-                            className="sr-only"
-                            accept="image/*"
-                            onChange={handleImageChange}
-                            disabled={formLoading}
-                          />
-                        </label>
-                        <p className="pl-1">or drag and drop</p>
-                      </div>
-                      <p className="text-xs text-secondary-500">
-                        PNG, JPG, GIF up to 10MB
-                      </p>
-                    </div>
-                  )}
-                </div>
-              </div>
-              
-              {!isEditing && !imageFile && !formData.imageUrl && (
-                <div className="text-sm mb-4">
-                  <p className="text-secondary-700">
-                    Don't have an image? You can use a direct URL to an image:
-                  </p>
-                  <input
-                    type="url"
-                    id="imageUrl"
-                    name="imageUrl"
-                    value={formData.imageUrl}
-                    onChange={handleInputChange}
-                    className="form-input mt-2"
-                    placeholder="https://example.com/image.jpg"
-                    disabled={formLoading}
-                  />
-                </div>
-              )}
-              
-              <div className="flex justify-end space-x-4 mt-6">                
-                <button 
-                  type="button"
-                  onClick={() => setShowModal(false)}
-                  className="btn-secondary"
-                  disabled={formLoading}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="btn-primary"
-                  disabled={formLoading}
-                >                  
-                  {formLoading ? (
-                    <>
-                      <Loader2 size={18} className="animate-spin mr-2" />
-                      {isEditing ? 'Updating...' : 'Creating...'}
-                    </>
-                  ) : (
-                    <>{isEditing ? 'Update Staff' : 'Create Staff'}</>
-                  )}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
 
-// Placeholder staff in case Firebase fetch fails
-const placeholderStaff = [
-  {
-    id: 'staff1',
-    email: 'staff1@example.com',
-    displayName: 'Staff 1',
-    role: 'staff',
-    imageUrl: 'https://images.pexels.com/photos/5599437/pexels-photo-5599437.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=2'
-  },
-  {
-    id: 'staff2',
-    email: 'staff2@example.com',
-    displayName: 'Staff 2',
-    role: 'staff',
-    imageUrl: 'https://images.pexels.com/photos/3757952/pexels-photo-3757952.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=2'
-  },
-  {
-    id: 'staff3',
-    email: 'staff3@example.com',
-    displayName: 'Staff 3',
-    role: 'staff',
-    imageUrl: 'https://images.pexels.com/photos/3865676/pexels-photo-3865676.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=2'
-  }
-];  
-
-export default StaffDashboard;
+export default StaffAppointmentsDashboard;
