@@ -15,6 +15,7 @@ import Services from './pages/Services';
 import Contact from './pages/Contact';
 import About from './pages/About';
 import WorkingHere from './pages/WorkingHere';
+import N8nChatWidget from './components/shared/N8nChatWidget';
 // import Login from './pages/auth/Login';
 // import Register from './pages/auth/Register';
 import Profile from './pages/client/Profile';
@@ -131,6 +132,7 @@ function App() {
           {/* Fallback route */}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
+        <N8nChatWidget />
       </main>
       <Footer />
     </div>

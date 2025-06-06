@@ -2,6 +2,14 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --chat--window--width: 380px;
+  --chat--window--height: 600px;
+  --chat--border-radius: 16px;
+  --chat--toggle--size: 60px;
+}
+
+
 @layer base {
   html {
     -webkit-tap-highlight-color: transparent;
