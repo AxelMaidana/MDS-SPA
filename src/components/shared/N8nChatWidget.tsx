@@ -7,44 +7,37 @@ export default function N8nChatWidget() {
   useEffect(() => {
     createChat({
       webhookUrl: 'https://axel2003.app.n8n.cloud/webhook/f406671e-c954-4691-b39a-66c90aa2f103/chat',
-      mode: 'window',
-      showWelcomeScreen: true,
+      mode: 'window',                 // "window" o "embedded"
+      showWelcomeScreen: true,        // Mostrar pantalla de bienvenida
+      defaultLanguage: 'en',          // Soporte multilenguaje
       initialMessages: [
-        '¡Hola! 👋',
-        'Soy tu asistente virtual de Sentirse Bien Spa. ¿En qué puedo ayudarte hoy?'
+        '🌸 ¡Hola! 👋',
+        'Soy el Asistente Virtual de Sentirse Bien Spa. ¿En qué puedo ayudarte hoy?'
       ],
-      defaultLanguage: 'en', // Solo "en" por ahora, pero podés poner textos personalizados abajo
+      theme: {
+        color: '#A88D72',             // Cambia el color principal (ejemplo: un tono relajante tipo tierra o rosa claro)
+        backgroundColor: '#FFF9F0',   // Fondo del chat
+        botMessage: {
+          background: '#FFF3E0',
+          textColor: '#3E2C1D',
+        },
+        userMessage: {
+          background: '#E5D7C0',
+          textColor: '#2E1C10',
+        },
+        borderRadius: '1rem',
+      },
       i18n: {
         en: {
-          title: '¡Hola! 👋',
-          subtitle: 'Escribime tu consulta sobre los servicios del Spa',
-          footer: '',
-          getStarted: 'Nueva conversación',
+          title: '🌿 Sentirse Bien Spa',
+          subtitle: 'Estoy aquí para ayudarte a relajarte y resolver tus dudas',
+          getStarted: 'Comenzar',
           inputPlaceholder: 'Escribí tu pregunta...',
           sendButton: 'Enviar',
-          welcomeMessage: 'Soy tu asistente virtual de Sentirse Bien Spa. ¿En qué puedo ayudarte hoy?',
-          errorMessage: 'Ups, algo salió mal. Por favor, inténtalo de nuevo.',
-          loadingMessage: 'Cargando...',
-          noResultsMessage: 'Lo siento, no hemos encontrado nada que coincida con tu consulta.',
-          retryButton: 'Reintentar',
-          closeButton: 'Cerrar',
-          chatBubbleUser: 'Usuario',
-          chatBubbleBot: 'Bot',
-          chatBubbleUserIcon: '👤',
-          chatBubbleBotIcon: '🤖',
-          sendIcon: '➡️',
-          retryIcon: '🔄',
-          closeIcon: '❌',
+          errorMessage: 'Ups, algo salió mal. Por favor, intentá de nuevo.',
           closeButtonTooltip: 'Cerrar',
+          footer: '🌿 Sentirse Bien Spa',
         },
-      },
-      theme: {
-        primaryColor: '#e74266',
-        backgroundColor: '#ffffff',
-        headerTextColor: '#ffffff',
-        chatBubbleUserColor: '#e74266',
-        chatBubbleBotColor: '#f0f0f0',
-        borderRadius: '12px',
       },
     });
   }, []);
