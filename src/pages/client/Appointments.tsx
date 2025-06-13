@@ -41,7 +41,7 @@ interface Appointment {
 }
 
 const Appointments = () => {
-  const { currentUser } = useAuth();
+  const { currentUser, userRole } = useAuth();
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [filteredAppointments, setFilteredAppointments] = useState<Appointment[]>([]);
   const [loading, setLoading] = useState(true);
@@ -55,11 +55,22 @@ const Appointments = () => {
 
       try {
         setLoading(true);
-        const q = query(
-          collection(db, 'appointments'),
-          where('userId', '==', currentUser.uid),
-          orderBy('date', 'desc')
-        );
+        let q;
+        
+        if (userRole === 'admin') {
+          // Si es admin, traer todos los turnos
+          q = query(
+            collection(db, 'appointments'),
+            orderBy('date', 'desc')
+          );
+        } else {
+          // Si es cliente, traer solo sus turnos
+          q = query(
+            collection(db, 'appointments'),
+            where('userId', '==', currentUser.uid),
+            orderBy('date', 'desc')
+          );
+        }
         
         const querySnapshot = await getDocs(q);
         const appointmentsData: Appointment[] = [];
@@ -97,7 +108,7 @@ const Appointments = () => {
     };
 
     fetchAppointments();
-  }, [currentUser]);
+  }, [currentUser, userRole]);
 
   useEffect(() => {
     if (activeFilter === 'all') {
@@ -480,14 +491,18 @@ const Appointments = () => {
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8">
           <div>
             <h1 className="text-3xl font-bold text-gray-900 mb-2">Mis Citas</h1>
-            <p className="text-gray-600">Administra tus citas programadas en el spa</p>
+            <p className="text-gray-600">
+              {userRole === 'admin' ? 'Administra todas las citas del spa' : 'Administra tus citas programadas en el spa'}
+            </p>
           </div>
-          <Link 
-            to="/book" 
-            className="mt-4 md:mt-0 bg-[#0C9383] hover:bg-[#0C9383]/90 text-white px-6 py-2 rounded-lg transition-colors"
-          >
-            Reservar Nueva Cita
-          </Link>
+          {userRole === 'client' && (
+            <Link 
+              to="/book" 
+              className="mt-4 md:mt-0 bg-[#0C9383] hover:bg-[#0C9383]/90 text-white px-6 py-2 rounded-lg transition-colors"
+            >
+              Reservar Nueva Cita
+            </Link>
+          )}
         </div>
 
         {/* Filtros */}
@@ -535,12 +550,16 @@ const Appointments = () => {
                 ? 'No has reservado ninguna cita aún.' 
                 : `No tienes citas ${getStatusText(activeFilter).toLowerCase()}.`}
             </p>
-            <Link 
-              to="/book" 
-              className="bg-[#0C9383] hover:bg-[#0C9383]/90 text-white px-6 py-2 rounded-lg inline-block transition-colors"
-            >
-              Reserva tu primera cita
-            </Link>
+            {userRole === 'client' ? (
+              <Link 
+                to="/book" 
+                className="bg-[#0C9383] hover:bg-[#0C9383]/90 text-white px-6 py-2 rounded-lg inline-block transition-colors"
+              >
+                Reserva tu primera cita
+              </Link>
+            ) : (
+              <p className="text-gray-600">No hay citas para mostrar</p>
+            )}
           </div>
         ) : (
           <div className="space-y-4">
@@ -566,6 +585,12 @@ const Appointments = () => {
                         {appointment.services.length > 1 && ` +${appointment.services.length - 1}`}
                       </h3>
                       <div className="flex items-center space-x-2 text-sm text-gray-500 mt-1">
+                        {userRole === 'admin' && (
+                          <>
+                            <span className="font-medium text-gray-700">{appointment.userName}</span>
+                            <span>•</span>
+                          </>
+                        )}
                         <span>{getAppointmentDate(appointment)}</span>
                         <span>•</span>
                         <span>{getAppointmentTime(appointment)}</span>
@@ -673,10 +698,19 @@ const Appointments = () => {
                           Información del profesional
                         </h4>
                         <div className="space-y-3">
+                          {userRole === 'admin' && (
+                            <div className="flex justify-between">
+                              <span className="text-gray-500 flex items-center">
+                                <User className="mr-2" size={16} />
+                                Cliente:
+                              </span>
+                              <span className="font-medium">{appointment.userName}</span>
+                            </div>
+                          )}
                           <div className="flex justify-between">
                             <span className="text-gray-500 flex items-center">
                               <User className="mr-2" size={16} />
-                              Nombre:
+                              Profesional:
                             </span>
                             <span className="font-medium">{appointment.staffName}</span>
                           </div>

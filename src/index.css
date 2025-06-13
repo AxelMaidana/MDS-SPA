@@ -160,3 +160,20 @@
 .toast-container {
   @apply font-sans;
 }
+
+/* Estilo para horarios ocupados */
+.time-slot-unavailable {
+  position: relative;
+  opacity: 0.7;
+}
+
+.time-slot-unavailable::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 10%;
+  right: 10%;
+  height: 2px;
+  background-color: #f87171; /* Rojo */
+  transform: rotate(-6deg);
+}

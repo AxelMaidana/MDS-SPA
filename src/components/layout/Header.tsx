@@ -50,15 +50,23 @@ const Header = () => {
 
   const navItems = [
     { label: 'Inicio', to: '/', icon: <Home size={20} /> },
-    ...(currentUser ? [{
+    ...(currentUser && userRole !== 'staff' ? [{
       label: 'Mis turnos', 
       to: '/appointments', 
       icon: <Calendar size={20} />
     }] : []),
-    { label: 'Servicios', to: '/services', icon: <Scissors size={20} /> },
+    ...(userRole !== 'staff' ? [{
+      label: 'Servicios', 
+      to: '/services', 
+      icon: <Scissors size={20} />
+    }] : []),
     { label: 'Sobre Nosotros', to: '/about', icon: <Info size={20} /> },
     { label: 'Contactanos', to: '/contact', icon: <Phone size={20} /> },
-    { label: 'Trabaja con nosotros', to: '/working-here', icon: <Building size={20} /> },
+    ...(userRole !== 'staff' ? [{
+      label: 'Trabaja con nosotros', 
+      to: '/working-here', 
+      icon: <Building size={20} />
+    }] : []),
   ];
 
   const toggleUserMenu = () => setUserMenuOpen(!userMenuOpen);

@@ -31,20 +31,44 @@ const handleSubmit = async (e: FormEvent) => {
   e.preventDefault();
   setError('');
 
+  // Validaciones para el registro
+  if (!isLogin) {
+    if (password.length < 6) {
+      setError('La contraseña debe tener al menos 6 caracteres');
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError('Las contraseñas no coinciden');
+      return;
+    }
+    if (!name.trim()) {
+      setError('Por favor ingresa tu nombre completo');
+      return;
+    }
+  }
+
   try {
     setLoading(true);
     if (isLogin) {
       await login(email, password);
       navigate('/');
     } else {
-      // ... (código de registro normal)
+      // Proceso de registro
+      await register(email, password, name);
+      // Después del registro exitoso, redirigir a la página de completar registro
+      navigate('/', { state: { email, name } });
     }
   } catch (err: any) {
-    if (err.code === 'PRE_REGISTERED_USER') {
-      // Redirigir SIEMPRE que el error sea este
-      navigate('/complete-registration', { state: { email } });
+    if (err.code === 'auth/email-already-in-use') {
+      setError('Este correo electrónico ya está registrado');
+    } else if (err.code === 'auth/invalid-email') {
+      setError('El correo electrónico no es válido');
+    } else if (err.code === 'auth/weak-password') {
+      setError('La contraseña es demasiado débil');
+    } else if (err.code === 'PRE_REGISTERED_USER') {
+      navigate('/complete-registration', { state: { email, name } });
     } else {
-      setError(err.message || 'Error desconocido');
+      setError(err.message || 'Error desconocido durante el proceso');
     }
   } finally {
     setLoading(false);
@@ -282,34 +306,6 @@ const handleSubmit = async (e: FormEvent) => {
           >
             {isLogin ? "Regístrate" : "Inicia sesión"}
           </button>
-        </motion.div>
-
-        {/* Social login options */}
-        <motion.div 
-          className="mt-8"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.6 }}
-        >
-          <div className="relative">
-            <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-gray-200"></div>
-            </div>
-            <div className="relative flex justify-center text-sm">
-              <span className="px-2 bg-white/90 text-gray-500">O continúa con</span>
-            </div>
-          </div>
-
-          <div className="mt-4 flex justify-center gap-3">
-            <button
-              className="w-full py-3 rounded-xl text-white font-medium transition-all duration-300 bg-gradient-to-r from-[#0C9383] to-[#99D4D6] hover:from-[#0C9383]/90 hover:to-[#99D4D6]/90 shadow-lg hover:shadow-[#99D4D6]/30"
-              onClick={() => navigate('/complete-registration')}
-              type="button"
-              disabled={loading}
-            >
-              Completar registro
-            </button>
-          </div>
         </motion.div>
       </motion.div>
     </main>

@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { collection, getDocs, query, where, orderBy, limit } from 'firebase/firestore';
 import { db } from '../../firebase/config';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import { Calendar, Users, Scissors, ArrowRight } from 'lucide-react';
+import { Calendar, Users, Scissors, ArrowRight, Filter, DollarSign } from 'lucide-react';
 
 interface DashboardCounts {
   clientes: number;
@@ -30,6 +30,24 @@ interface DistribucionServicios {
   nombre: string;
   valor: number;
 }
+
+// Datos de ejemplo para totales
+const totalesPorServicioEjemplo = [
+  { nombre: 'Masaje Relajante', total: 4500, cantidad: 2 },
+  { nombre: 'Facial Rejuvenecedor', total: 22800, cantidad: 3 },
+  { nombre: 'Manicura Premium', total: 20800, cantidad: 2 },
+  { nombre: 'Pedicura Spa', total: 18200, cantidad: 2 },
+  { nombre: 'Depilación Facial', total: 10800, cantidad: 2 },
+  { nombre: 'Tratamiento Capilar', total: 4200, cantidad: 2 }
+];
+
+const totalesPorProfesionalEjemplo = [
+  { nombre: 'María González', total: 25000, cantidad: 3 },
+  { nombre: 'Juan Pérez', total: 25200, cantidad: 3 },
+  { nombre: 'Ana Martínez', total: 26800, cantidad: 3 },
+  { nombre: 'Carlos López', total: 23200, cantidad: 2 },
+  { nombre: 'Laura Rodríguez', total: 15800, cantidad: 2 }
+];
 
 const AdminDashboard = () => {
   const [contadores, setContadores] = useState<DashboardCounts>({
@@ -309,6 +327,121 @@ const AdminDashboard = () => {
                       />
                     </PieChart>
                   </ResponsiveContainer>
+                </div>
+              </div>
+            </div>
+
+            {/* Totales por Servicio y Profesional */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+              {/* Filtros de fecha */}
+              <div className="col-span-1 lg:col-span-2 bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                <div className="flex flex-wrap gap-4 items-center">
+                  <div className="flex items-center space-x-2">
+                    <Filter size={20} className="text-gray-500" />
+                    <span className="text-gray-700 font-medium">Período: Último mes</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Totales por Servicio */}
+              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                <h3 className="text-lg font-medium text-gray-800 mb-6 flex items-center">
+                  <DollarSign className="mr-2 text-[#0C9383]" size={20} />
+                  Totales por Servicio
+                </h3>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Servicio
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Total
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Cantidad
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {totalesPorServicioEjemplo.map((servicio) => (
+                        <tr key={servicio.nombre} className="hover:bg-gray-50">
+                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                            {servicio.nombre}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            ${servicio.total.toLocaleString('es-AR')}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {servicio.cantidad} citas
+                          </td>
+                        </tr>
+                      ))}
+                      <tr className="bg-gray-50">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-bold text-gray-900">
+                          Total General
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-bold text-gray-900">
+                          ${totalesPorServicioEjemplo.reduce((sum, s) => sum + s.total, 0).toLocaleString('es-AR')}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-bold text-gray-900">
+                          {totalesPorServicioEjemplo.reduce((sum, s) => sum + s.cantidad, 0)} citas
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Totales por Profesional */}
+              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                <h3 className="text-lg font-medium text-gray-800 mb-6 flex items-center">
+                  <Users className="mr-2 text-[#0C9383]" size={20} />
+                  Totales por Profesional
+                </h3>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Profesional
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Total
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Cantidad
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {totalesPorProfesionalEjemplo.map((profesional) => (
+                        <tr key={profesional.nombre} className="hover:bg-gray-50">
+                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                            {profesional.nombre}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            ${profesional.total.toLocaleString('es-AR')}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {profesional.cantidad} citas
+                          </td>
+                        </tr>
+                      ))}
+                      <tr className="bg-gray-50">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-bold text-gray-900">
+                          Total General
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-bold text-gray-900">
+                          ${totalesPorProfesionalEjemplo.reduce((sum, p) => sum + p.total, 0).toLocaleString('es-AR')}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-bold text-gray-900">
+                          {totalesPorProfesionalEjemplo.reduce((sum, p) => sum + p.cantidad, 0)} citas
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
                 </div>
               </div>
             </div>

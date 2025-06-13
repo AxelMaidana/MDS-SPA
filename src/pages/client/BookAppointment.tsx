@@ -5,10 +5,14 @@ import { db } from '../../firebase/config';
 import { useAuth } from '../../contexts/AuthContext';
 import DatePicker from 'react-datepicker';
 import "react-datepicker/dist/react-datepicker.css";
-import { addDays, isAfter, isBefore, setHours, setMinutes, format, differenceInHours } from 'date-fns';
+import { isAfter, isBefore, setHours, setMinutes, format, differenceInHours, isSameDay } from 'date-fns';
 import toast from 'react-hot-toast';
 import { Calendar, Clock, UserCheck, ChevronRight, Check, ArrowRight, CreditCard } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import emailjs from '@emailjs/browser';
+
+// Configurar EmailJS
+emailjs.init("Qx0AqfxjtNIVVyQY5");
 
 interface Service {
   id: string;
@@ -19,6 +23,8 @@ interface Service {
   imageUrl: string;
   specialty: string;
   availableTimes?: string[];
+  date?: Date | null;
+  time?: string;
 }
 
 interface StaffMember {
@@ -30,6 +36,21 @@ interface StaffMember {
   imageUrl?: string;
 }
 
+interface ServiceWithStaff extends Service {
+  staffId?: string;
+}
+
+// Generar todos los horarios posibles
+const allPossibleTimes: string[] = [];
+const startHour = 9;
+const endHour = 17;
+
+for (let hour = startHour; hour < endHour; hour++) {
+  ['00', '30'].forEach(minute => {
+    allPossibleTimes.push(`${hour}:${minute}`);
+  });
+}
+
 const BookAppointment = () => {
   const { currentUser } = useAuth();
   const navigate = useNavigate();
@@ -39,9 +60,10 @@ const BookAppointment = () => {
 
   const [services, setServices] = useState<Service[]>([]);
   const [staff, setStaff] = useState<StaffMember[]>([]);
-  const [filteredStaff, setFilteredStaff] = useState<StaffMember[]>([]);
-  const [selectedService, setSelectedService] = useState<string>(preSelectedServiceId || '');
-  const [selectedStaff, setSelectedStaff] = useState<string>('');
+  const [filteredStaff, setFilteredStaff] = useState<{[key: string]: StaffMember[]}>({});
+  const [selectedServices, setSelectedServices] = useState<ServiceWithStaff[]>([]);
+  const [selectedService, setSelectedService] = useState<string>('');
+  const [selectedStaff, setSelectedStaff] = useState<{[key: string]: string}>({});
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [selectedTime, setSelectedTime] = useState<string>('');
   const [availableTimes, setAvailableTimes] = useState<string[]>([]);
@@ -58,7 +80,6 @@ const BookAppointment = () => {
     expiry: '',
     cvv: ''
   });
-  const [selectedServices, setSelectedServices] = useState<Service[]>([]);
 
   // Obtener todas las especialidades únicas
   const getSpecialties = () => {
@@ -97,7 +118,7 @@ const BookAppointment = () => {
           staffData.push({ id: doc.id, ...doc.data() } as StaffMember);
         });
         setStaff(staffData);
-        setFilteredStaff(staffData);
+        setFilteredStaff({});
 
         if (preSelectedServiceId) {
           setSelectedService(preSelectedServiceId);
@@ -123,126 +144,240 @@ const BookAppointment = () => {
         const filtered = staff.filter(member => 
           member.specialty === service.specialty
         );
-        setFilteredStaff(filtered);
-        setSelectedStaff('');
+        setFilteredStaff({ [service.id]: filtered });
+        setSelectedStaff({});
       }
     } else {
       setCurrentService(null);
-      setFilteredStaff(staff);
+      setFilteredStaff({});
     }
   }, [selectedService, services, staff]);
 
   // Update current staff when selected staff changes
   useEffect(() => {
-    if (selectedStaff && filteredStaff.length > 0) {
-      const staffMember = filteredStaff.find(s => s.id === selectedStaff);
-      setCurrentStaff(staffMember || null);
+    if (selectedStaff && Object.keys(selectedStaff).length > 0) {
+      const staffMembers = Object.values(selectedStaff).map(staffId => staff.find(s => s.id === staffId));
+      setCurrentStaff(staffMembers[0] || null);
     } else {
       setCurrentStaff(null);
     }
-  }, [selectedStaff, filteredStaff]);
+  }, [selectedStaff, staff]);
 
   // Generate available time slots
   useEffect(() => {
-    if (selectedDate) {
-      const times: string[] = [];
-      const startHour = 9;
-      const endHour = 17;
-      
-      for (let hour = startHour; hour < endHour; hour++) {
-        ['00', '30'].forEach(minute => {
-          times.push(`${hour}:${minute}`);
-        });
+    const fetchBookedAppointments = async () => {
+      if (selectedDate && Object.keys(selectedStaff).length > 0) {
+        try {
+          // Convertir la fecha seleccionada a inicio y fin del día
+          const startOfDay = new Date(selectedDate);
+          startOfDay.setHours(0, 0, 0, 0);
+          
+          const endOfDay = new Date(selectedDate);
+          endOfDay.setHours(23, 59, 59, 999);
+          
+          // Consultar citas para este profesional en esta fecha
+          const appointmentsQuery = query(
+            collection(db, 'appointments'),
+            where('staffId', 'in', Object.values(selectedStaff)),
+            where('date', '>=', startOfDay),
+            where('date', '<=', endOfDay)
+          );
+          
+          const querySnapshot = await getDocs(appointmentsQuery);
+          const bookedTimes: string[] = [];
+          
+          querySnapshot.forEach((doc) => {
+            const appointmentData = doc.data();
+            const appointmentDate = appointmentData.date.toDate();
+            const hours = appointmentDate.getHours();
+            const minutes = appointmentDate.getMinutes();
+            const timeString = `${hours}:${minutes < 10 ? '0' + minutes : minutes}`;
+            bookedTimes.push(timeString);
+          });
+          
+          return bookedTimes;
+        } catch (error) {
+          console.error('Error fetching appointments:', error);
+          return [];
+        }
       }
-      
-      setAvailableTimes(times);
-    }
-  }, [selectedDate]);
+      return [];
+    };
+
+    const generateAvailableTimes = async () => {
+      if (selectedDate) {
+        const bookedTimes = await fetchBookedAppointments();
+        
+        const times: string[] = [];
+        const startHour = 9;
+        const endHour = 17;
+        
+        for (let hour = startHour; hour < endHour; hour++) {
+          ['00', '30'].forEach(minute => {
+            const timeString = `${hour}:${minute}`;
+            // Solo agregar si no está reservado
+            if (!bookedTimes.includes(timeString)) {
+              times.push(timeString);
+            }
+          });
+        }
+        
+        setAvailableTimes(times);
+      }
+    };
+
+    generateAvailableTimes();
+  }, [selectedDate, selectedStaff]);
 
   const handleDateChange = (date: Date | null) => {
     setSelectedDate(date);
     setSelectedTime('');
   };
 
-  const handleAddAnotherService = () => {
-    if (currentService) {
-      setSelectedServices([...selectedServices, currentService]);
-      setSelectedService('');
-      setSelectedStaff('');
-      setSelectedDate(null);
-      setSelectedTime('');
-      setActiveStep('services');
-      toast.success('Servicio agregado. Selecciona otro servicio o procede al pago.');
-    }
-  };
-
-  const handleRemoveService = (serviceId: string) => {
-    setSelectedServices(selectedServices.filter(s => s.id !== serviceId));
+  const filterDate = (date: Date) => {
+    const now = new Date();
+    const minDate = new Date(now.getTime() + (48 * 60 * 60 * 1000)); // 48 horas desde ahora
+    const maxDate = new Date(now.getTime() + (30 * 24 * 60 * 60 * 1000)); // 30 días desde ahora
+    
+    // Convertir las fechas a inicio del día para comparación
+    const dateStart = new Date(date.setHours(0, 0, 0, 0));
+    const minDateStart = new Date(minDate.setHours(0, 0, 0, 0));
+    const maxDateStart = new Date(maxDate.setHours(0, 0, 0, 0));
+    
+    return isAfter(dateStart, minDateStart) && isBefore(dateStart, maxDateStart);
   };
 
   const calculateTotal = () => {
     const basePrice = selectedServices.reduce((sum, service) => sum + service.price, currentService?.price || 0);
     
-    // Aplicar descuento del 15% si se paga online y es más de 48 horas antes
-    if (paymentMethod === 'web' && selectedDate) {
-      const hoursUntilAppointment = differenceInHours(selectedDate, new Date());
-      if (hoursUntilAppointment > 48) {
-        return basePrice * 0.85; // 15% de descuento
-      }
+    // Aplicar descuento del 15% si se paga online
+    if (paymentMethod === 'web') {
+      return basePrice * 0.85; // 15% de descuento
     }
     
     return basePrice;
   };
 
   const handlePaymentSubmit = async () => {
-    if (!currentUser || !selectedService || !selectedStaff || !selectedDate || !selectedTime) {
+    if (!currentUser || !selectedDate || !selectedTime) {
       toast.error('Por favor completa todos los campos');
       return;
     }
 
-    if (!currentService) {
-      toast.error('Selección de servicio inválida');
+    if (!areAllServicesAssigned()) {
+      toast.error('Por favor asigna un profesional a cada servicio');
+      return;
+    }
+
+    // Verificar que todos los servicios sean en el mismo día
+    const allServices = selectedServices.map(service => ({
+      ...service,
+      date: selectedDate,
+      time: selectedTime
+    }));
+
+    const firstServiceDate = allServices[0].date;
+    if (!firstServiceDate) {
+      toast.error('Error en la fecha del primer servicio');
+      return;
+    }
+
+    const allSameDay = allServices.every(service => 
+      service.date && isSameDay(new Date(service.date), new Date(firstServiceDate))
+    );
+
+    if (!allSameDay) {
+      toast.error('Todos los servicios deben ser en el mismo día. Por favor, realiza reservas separadas para diferentes días.');
+      return;
+    }
+
+    // Verificar que si es pago web, se haya ingresado tarjeta de débito
+    if (paymentMethod === 'web' && (!cardDetails.number || !cardDetails.expiry || !cardDetails.cvv)) {
+      toast.error('Por favor completa los datos de tu tarjeta de débito');
       return;
     }
 
     setSubmitting(true);
 
     try {
-      const [hours, minutes] = selectedTime.split(':').map(Number);
-      const appointmentDateTime = setMinutes(setHours(selectedDate, hours), minutes);
-      
-      const allServices = [...selectedServices, currentService];
-      const totalPrice = calculateTotal();
-      const paymentStatus = paymentMethod === 'web' ? 'paid' : 'pending';
-      const discountApplied = paymentMethod === 'web' && differenceInHours(appointmentDateTime, new Date()) > 48;
+      // Crear una cita por cada servicio con su staff asignado
+      const appointmentPromises = allServices.map(async (service) => {
+        if (!service.date || !service.time) {
+          throw new Error('Fecha u hora no definida para un servicio');
+        }
 
-      // Crear una sola reserva para todos los servicios si son el mismo día
-      const appointmentData = {
-        userId: currentUser.uid,
-        userEmail: currentUser.email,
-        userName: currentUser.displayName,
-        services: allServices.map(service => ({
-          id: service.id,
-          name: service.name,
-          price: service.price,
-          duration: service.duration
-        })),
-        totalPrice,
-        paymentMethod,
-        paymentStatus,
-        discountApplied,
-        staffId: selectedStaff,
-        staffName: currentStaff?.displayName || 'Desconocido',
-        date: appointmentDateTime,
-        createdAt: serverTimestamp(),
-        status: 'booked'
-      };
+        const [hours, minutes] = service.time.split(':').map(Number);
+        const appointmentDateTime = setMinutes(setHours(service.date, hours), minutes);
+        const staffMember = staff.find(s => s.id === selectedStaff[service.id]);
+
+        const appointmentData = {
+          userId: currentUser.uid,
+          userEmail: currentUser.email,
+          userName: currentUser.displayName,
+          services: [{
+            id: service.id,
+            name: service.name,
+            price: service.price,
+            duration: service.duration
+          }],
+          totalPrice: paymentMethod === 'web' ? service.price * 0.85 : service.price,
+          paymentMethod,
+          paymentStatus: paymentMethod === 'web' ? 'paid' : 'pending',
+          discountApplied: paymentMethod === 'web',
+          staffId: selectedStaff[service.id],
+          staffName: staffMember?.displayName || 'Desconocido',
+          date: appointmentDateTime,
+          createdAt: serverTimestamp(),
+          status: 'booked',
+          groupId: allServices.length > 1 ? serverTimestamp() : null
+        };
+        
+        const docRef = await addDoc(collection(db, 'appointments'), appointmentData);
+        
+        // Preparar datos para el correo asegurando que todos sean strings válidos
+        const emailData = {
+          service_name: service.name || 'Servicio de Spa',
+          appointment_id: docRef.id.slice(-6).toUpperCase(),
+          user_name: currentUser.displayName || 'Cliente',
+          user_email: currentUser.email || '',
+          appointment_date: format(appointmentDateTime, 'dd/MM/yyyy'),
+          appointment_time: format(appointmentDateTime, 'HH:mm'),
+          staff_name: staffMember?.displayName || 'Profesional',
+          total_price: (paymentMethod === 'web' ? service.price * 0.85 : service.price).toFixed(2),
+          payment_method: paymentMethod === 'web' ? 'Online' : 'En sitio',
+          payment_status: paymentMethod === 'web' ? 'Pagado' : 'Pendiente',
+          discount_applied: paymentMethod === 'web',
+          services: allServices.map(s => ({
+            name: s.name,
+            duration: s.duration.toString(),
+            price: (paymentMethod === 'web' ? s.price * 0.85 : s.price).toFixed(2)
+          }))
+        };
+
+        // Enviar correo usando EmailJS
+        try {
+          console.log('Enviando correo con datos:', JSON.stringify(emailData, null, 2));
+          await emailjs.send(
+            'service_1ivbm3y',
+            'template_i3ji9hd',
+            emailData
+          );
+          console.log('Correo enviado exitosamente para la cita:', docRef.id);
+        } catch (emailError) {
+          console.error('Error al enviar el correo:', emailError);
+          console.log('Datos que causaron el error:', JSON.stringify(emailData, null, 2));
+          // No interrumpimos el flujo si falla el envío del correo
+        }
+
+        return docRef;
+      });
+
+      await Promise.all(appointmentPromises);
       
-      await addDoc(collection(db, 'appointments'), appointmentData);
-      
-      // Enviar comprobante por email (simulado)
       if (paymentMethod === 'web') {
         toast.success('Pago procesado y comprobante enviado a tu email');
+      } else {
+        toast.success('Reserva confirmada. Recibirás un correo con los detalles.');
       }
       
       setShowSuccess(true);
@@ -254,25 +389,33 @@ const BookAppointment = () => {
     }
   };
 
-  const filterDate = (date: Date) => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    return isAfter(date, today) && isBefore(date, addDays(today, 30));
-  };
-
   const handleServiceSelect = (serviceId: string) => {
-    setSelectedService(serviceId);
-    setActiveStep('staff');
+    const service = services.find(s => s.id === serviceId);
+    if (service) {
+      // Verificar si el servicio ya está seleccionado
+      const isAlreadySelected = selectedServices.some(s => s.id === serviceId);
+      if (isAlreadySelected) {
+        // Si ya está seleccionado, lo removemos
+        setSelectedServices(selectedServices.filter(s => s.id !== serviceId));
+        toast.success('Servicio removido de la selección');
+      } else {
+        // Si no está seleccionado, lo agregamos
+        setSelectedServices([...selectedServices, { ...service, staffId: undefined }]);
+        toast.success('Servicio agregado a la selección');
+      }
+    }
   };
 
-  const handleStaffSelect = (staffId: string) => {
-    setSelectedStaff(staffId);
-    setActiveStep('datetime');
+  const handleStaffSelect = (serviceId: string, staffId: string) => {
+    setSelectedStaff(prev => ({
+      ...prev,
+      [serviceId]: staffId
+    }));
   };
 
   const handleBackToServices = () => {
     setActiveStep('services');
-    setSelectedStaff('');
+    setSelectedStaff({});
   };
 
   const handleBackToStaff = () => {
@@ -284,6 +427,87 @@ const BookAppointment = () => {
   const handleBackToDatetime = () => {
     setActiveStep('datetime');
     setPaymentMethod(null);
+  };
+
+  const handleProceedToDatetime = () => {
+    if (!areAllServicesAssigned()) {
+      toast.error('Por favor asigna un profesional a cada servicio');
+      return;
+    }
+    setActiveStep('datetime');
+  };
+
+  const handleExpiryChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    let value = e.target.value.replace(/\D/g, ''); // Solo permite números
+    
+    if (value.length > 0) {
+      // Si ya tiene 2 dígitos y no tiene el "/", lo agrega
+      if (value.length === 2 && !cardDetails.expiry.includes('/')) {
+        value = value + '/';
+      }
+      // Si ya tiene el "/" y más de 2 dígitos, mantiene solo los primeros 2 dígitos del mes
+      else if (value.length > 2 && !value.includes('/')) {
+        value = value.slice(0, 2) + '/' + value.slice(2);
+      }
+      // Limita a 2 dígitos después del "/"
+      if (value.includes('/')) {
+        const [month, year] = value.split('/');
+        if (year && year.length > 2) {
+          value = month + '/' + year.slice(0, 2);
+        }
+      }
+    }
+    
+    // Limita el mes a 12
+    if (value.length >= 2) {
+      const month = parseInt(value.split('/')[0]);
+      if (month > 12) {
+        value = '12' + (value.includes('/') ? '/' + value.split('/')[1] : '');
+      }
+    }
+
+    setCardDetails(prev => ({ ...prev, expiry: value }));
+  };
+
+  const handleCardNumberChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    let value = e.target.value.replace(/\D/g, ''); // Solo permite números
+    
+    // Formatear el número agregando espacios cada 4 dígitos
+    if (value.length > 0) {
+      const parts = [];
+      for (let i = 0; i < value.length; i += 4) {
+        parts.push(value.slice(i, i + 4));
+      }
+      value = parts.join(' ');
+    }
+    
+    // Limitar a 19 caracteres (16 dígitos + 3 espacios)
+    if (value.length > 19) {
+      value = value.slice(0, 19);
+    }
+
+    setCardDetails(prev => ({ ...prev, number: value }));
+  };
+
+  // Modificar el useEffect que filtra el staff para cada servicio
+  useEffect(() => {
+    if (selectedServices.length > 0 && staff.length > 0) {
+      // Para cada servicio, obtener los profesionales que coinciden con su especialidad
+      const staffByService = selectedServices.reduce((acc, service) => {
+        const availableStaff = staff.filter(member => member.specialty === service.specialty);
+        acc[service.id] = availableStaff;
+        return acc;
+      }, {} as {[key: string]: StaffMember[]});
+      
+      setFilteredStaff(staffByService);
+    } else {
+      setFilteredStaff({});
+    }
+  }, [selectedServices, staff]);
+
+  // Función para verificar si todos los servicios tienen staff asignado
+  const areAllServicesAssigned = () => {
+    return selectedServices.every(service => selectedStaff[service.id]);
   };
 
   const handleProceedToPayment = () => {
@@ -354,7 +578,7 @@ const BookAppointment = () => {
                 <div className={`p-5 rounded-xl transition-all duration-300 ${
                   activeStep === 'staff'
                     ? "bg-gradient-to-r from-[#0C9383] to-[#99D4D6] text-white shadow-lg"
-                    : selectedStaff
+                    : Object.keys(selectedStaff).length > 0
                       ? "bg-white border border-[#0C9383] shadow-md"
                       : "bg-white border border-gray-200 shadow-md"
                 } ${selectedService ? "cursor-pointer" : "opacity-60 cursor-not-allowed"}`}
@@ -363,12 +587,12 @@ const BookAppointment = () => {
                     <div className={`w-12 h-12 rounded-full flex items-center justify-center ${
                       activeStep === 'staff'
                         ? "bg-white/20" 
-                        : selectedStaff 
+                        : Object.keys(selectedStaff).length > 0 
                           ? "bg-[#0C9383] text-white" 
                           : "bg-gray-100 text-[#0C9383]"
                     }`}>
                       <span className="font-bold">
-                        {selectedStaff ? <Check size={20} /> : '2'}
+                        {Object.keys(selectedStaff).length > 0 ? <Check size={20} /> : '2'}
                       </span>
                     </div>
                     <div className="ml-4 flex-1">
@@ -387,8 +611,8 @@ const BookAppointment = () => {
                     : selectedDate && selectedTime
                       ? "bg-white border border-[#0C9383] shadow-md"
                       : "bg-white border border-gray-200 shadow-md"
-                } ${selectedStaff ? "cursor-pointer" : "opacity-60 cursor-not-allowed"}`}
-                onClick={() => selectedStaff && setActiveStep('datetime')}>
+                } ${Object.keys(selectedStaff).length > 0 ? "cursor-pointer" : "opacity-60 cursor-not-allowed"}`}
+                onClick={() => Object.keys(selectedStaff).length > 0 && setActiveStep('datetime')}>
                   <div className="flex items-center">
                     <div className={`w-12 h-12 rounded-full flex items-center justify-center ${
                       activeStep === 'datetime'
@@ -418,7 +642,7 @@ const BookAppointment = () => {
                     ? "bg-gradient-to-r from-[#0C9383] to-[#99D4D6] text-white shadow-lg"
                     : paymentMethod
                       ? "bg-white border border-[#0C9383] shadow-md"
-                      : "bg-white border border-gray-200 shadow-md"
+                    : "bg-white border border-gray-200 shadow-md"
                 } ${selectedDate && selectedTime ? "cursor-pointer" : "opacity-60 cursor-not-allowed"}`}
                 onClick={() => selectedDate && selectedTime && setActiveStep('payment')}>
                   <div className="flex items-center">
@@ -522,7 +746,9 @@ const BookAppointment = () => {
                             whileHover={{ y: -5 }}
                             whileTap={{ scale: 0.98 }}
                             className={`relative overflow-hidden rounded-xl shadow-md cursor-pointer transition-all duration-300 ${
-                              selectedService === service.id ? 'ring-2 ring-[#0C9383]' : 'hover:shadow-lg'
+                              selectedServices.some(s => s.id === service.id) 
+                                ? 'ring-2 ring-[#0C9383] bg-[#0C9383]/5' 
+                                : 'hover:shadow-lg'
                             }`}
                             onClick={() => handleServiceSelect(service.id)}
                           >
@@ -551,10 +777,19 @@ const BookAppointment = () => {
                                 </div>
                               </div>
                             </div>
+                            <div className="absolute top-2 right-2">
+                              {selectedServices.some(s => s.id === service.id) && (
+                                <div className="bg-[#0C9383] text-white rounded-full p-1">
+                                  <Check size={16} />
+                                </div>
+                              )}
+                            </div>
                           </motion.div>
                         ))}
                       </div>
                     )}
+
+                    
                   </div>
                 )}
 
@@ -571,69 +806,127 @@ const BookAppointment = () => {
                       </button>
                       
                       <h2 className="text-3xl font-bold bg-gradient-to-r from-[#0C9383] to-[#0C9383] bg-clip-text text-transparent mb-2">
-                        Selecciona tu Profesional
+                        Selecciona los Profesionales
                       </h2>
                       <p className="text-gray-600">
-                        Elige al profesional que realizará tu tratamiento
+                        Asigna un profesional para cada servicio seleccionado
                       </p>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {filteredStaff.length > 0 ? (
-                        filteredStaff.map((member) => (
-                          <motion.div
-                            key={member.id}
-                            whileHover={{ y: -3 }}
-                            whileTap={{ scale: 0.98 }}
-                            initial={{ opacity: 0, y: 10 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            transition={{ duration: 0.3 }}
-                            className={`p-4 rounded-xl transition-all cursor-pointer ${
-                              selectedStaff === member.id
-                                ? "ring-2 ring-[#0C9383] bg-gradient-to-br from-[#0C9383]/10 to-[#99D4D6]/10"
-                                : "bg-white hover:bg-gray-50 border border-gray-200"
-                            }`}
-                            onClick={() => handleStaffSelect(member.id)}
-                          >
-                            <div className="flex items-center gap-4">
-                              <div className={`w-16 h-16 rounded-full flex items-center justify-center overflow-hidden ${
-                                selectedStaff === member.id 
-                                  ? "ring-2 ring-[#0C9383]"
-                                  : "border border-gray-200"
-                              }`}>
-                                {member.imageUrl ? (
-                                  <img 
-                                    src={member.imageUrl} 
-                                    alt={member.displayName}
-                                    className="w-full h-full object-cover"
-                                  />
-                                ) : (
-                                  <div className="w-full h-full bg-gray-100 flex items-center justify-center text-[#0C9383]">
-                                    <UserCheck className="w-6 h-6" />
-                                  </div>
-                                )}
-                              </div>
-                              <div>
-                                <p className={`font-medium ${
-                                  selectedStaff === member.id ? "text-[#0C9383]" : "text-gray-800"
-                                }`}>
-                                  {member.displayName}
-                                </p>
-                                <p className="text-sm text-gray-500">{member.specialty}</p>
-                                <div className="mt-2 flex items-center">
-                                  <span className="text-xs bg-[#0C9383]/10 text-[#0C9383] px-2 py-1 rounded-full">
-                                    {member.role === 'staff' ? 'Profesional' : member.role}
-                                  </span>
-                                </div>
+                    <div className="space-y-8">
+                      {selectedServices.map((service) => (
+                        <div key={service.id} className="bg-white rounded-xl p-6 shadow-md border border-gray-100">
+                          <div className="flex items-start gap-4 mb-4">
+                            <div className="w-20 h-20 rounded-lg overflow-hidden">
+                              <img 
+                                src={service.imageUrl} 
+                                alt={service.name}
+                                className="w-full h-full object-cover"
+                              />
+                            </div>
+                            <div>
+                              <h3 className="text-lg font-semibold text-gray-800">{service.name}</h3>
+                              <p className="text-sm text-gray-500">{service.specialty}</p>
+                              <div className="flex gap-4 mt-1">
+                                <span className="text-xs text-[#0C9383] flex items-center">
+                                  <Clock size={12} className="mr-1" />
+                                  {service.duration} min
+                                </span>
+                                <span className="text-xs font-bold text-[#0C9383]">
+                                  ${service.price}
+                                </span>
                               </div>
                             </div>
-                          </motion.div>
-                        ))
-                      ) : (
-                        <div className="col-span-2 text-center py-8 text-gray-500">
-                          No hay Profesionales disponibles para este servicio
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                            {filteredStaff[service.id]?.length > 0 ? (
+                              filteredStaff[service.id].map((member) => (
+                                <motion.div
+                                  key={member.id}
+                                  whileHover={{ y: -3 }}
+                                  whileTap={{ scale: 0.98 }}
+                                  className={`p-4 rounded-xl transition-all cursor-pointer ${
+                                    selectedStaff[service.id] === member.id
+                                      ? "ring-2 ring-[#0C9383] bg-gradient-to-br from-[#0C9383]/10 to-[#99D4D6]/10"
+                                      : "bg-white hover:bg-gray-50 border border-gray-200"
+                                  }`}
+                                  onClick={() => handleStaffSelect(service.id, member.id)}
+                                >
+                                  <div className="flex items-center gap-4">
+                                    <div className={`w-16 h-16 rounded-full flex items-center justify-center overflow-hidden ${
+                                      selectedStaff[service.id] === member.id 
+                                        ? "ring-2 ring-[#0C9383]"
+                                        : "border border-gray-200"
+                                    }`}>
+                                      {member.imageUrl ? (
+                                        <img 
+                                          src={member.imageUrl} 
+                                          alt={member.displayName}
+                                          className="w-full h-full object-cover"
+                                        />
+                                      ) : (
+                                        <div className="w-full h-full bg-gray-100 flex items-center justify-center text-[#0C9383]">
+                                          <UserCheck className="w-6 h-6" />
+                                        </div>
+                                      )}
+                                    </div>
+                                    <div>
+                                      <p className={`font-medium ${
+                                        selectedStaff[service.id] === member.id ? "text-[#0C9383]" : "text-gray-800"
+                                      }`}>
+                                        {member.displayName}
+                                      </p>
+                                      <p className="text-sm text-gray-500">{member.specialty}</p>
+                                    </div>
+                                  </div>
+                                </motion.div>
+                              ))
+                            ) : (
+                              <div className="col-span-2 bg-yellow-50 border border-yellow-200 rounded-xl p-6 text-center">
+                                <div className="flex flex-col items-center gap-2">
+                                  <div className="w-12 h-12 rounded-full bg-yellow-100 flex items-center justify-center">
+                                    <UserCheck className="w-6 h-6 text-yellow-600" />
+                                  </div>
+                                  <h4 className="text-lg font-medium text-yellow-800">
+                                    No hay personal disponible
+                                  </h4>
+                                  <p className="text-yellow-600">
+                                    Por el momento no contamos con profesionales para este servicio.
+                                    Por favor, intenta con otro servicio o vuelve más tarde.
+                                  </p>
+                                  <button
+                                    onClick={() => {
+                                      setSelectedServices(selectedServices.filter(s => s.id !== service.id));
+                                      toast.success('Servicio removido de la selección');
+                                    }}
+                                    className="mt-2 text-sm text-yellow-600 hover:text-yellow-700 underline"
+                                  >
+                                    Remover este servicio
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
                         </div>
-                      )}
+                      ))}
+                    </div>
+
+                    {/* Botón para proceder en la sección de profesionales */}
+                    <div className="flex justify-end mt-6">
+                      <button
+                        onClick={handleProceedToDatetime}
+                        disabled={!areAllServicesAssigned()}
+                        className={`px-6 py-3 rounded-xl text-white font-medium shadow-lg transition-all duration-300 ${
+                          areAllServicesAssigned()
+                            ? 'bg-gradient-to-r from-[#0C9383] to-[#99D4D6] hover:from-[#0C9383]/90 hover:to-[#99D4D6]/90 hover:shadow-xl'
+                            : 'bg-gray-300 cursor-not-allowed'
+                        }`}
+                      >
+                        {areAllServicesAssigned() 
+                          ? 'Continuar a Fecha y Hora'
+                          : 'Selecciona un profesional para cada servicio'}
+                      </button>
                     </div>
                   </div>
                 )}
@@ -668,13 +961,15 @@ const BookAppointment = () => {
                           selected={selectedDate}
                           onChange={handleDateChange}
                           filterDate={filterDate}
-                          minDate={addDays(new Date(), 1)}
-                          maxDate={addDays(new Date(), 30)}
+                          minDate={new Date(new Date().getTime() + (48 * 60 * 60 * 1000))}
                           placeholderText="Selecciona una fecha"
                           className="w-full px-4 py-3 rounded-xl border border-gray-300 focus:ring-2 focus:ring-[#0C9383] focus:border-transparent"
                           required
                           inline
                         />
+                        <p className="text-sm text-gray-500 mt-2">
+                          Las reservas deben realizarse con al menos 48 horas de anticipación
+                        </p>
                       </div>
 
                       <div>
@@ -683,74 +978,72 @@ const BookAppointment = () => {
                           Hora
                         </label>
                         <div className="grid grid-cols-2 gap-2 max-h-64 overflow-y-auto p-1">
-                          {availableTimes.map((time) => (
-                            <motion.button
-                              key={time}
-                              type="button"
-                              onClick={() => setSelectedTime(time)}
-                              whileHover={{ scale: 1.05 }}
-                              whileTap={{ scale: 0.95 }}
-                              className={`py-2 px-3 rounded-lg text-center transition-all ${
-                                selectedTime === time
-                                  ? "bg-[#0C9383] text-white shadow-md"
-                                  : "bg-gray-100 hover:bg-gray-200"
-                              }`}
-                            >
-                              {time}
-                            </motion.button>
-                          ))}
+                          {allPossibleTimes.map((time) => {
+                            const [hours, minutes] = time.split(':');
+                            const timeFormatted = `${parseInt(hours) > 12 ? parseInt(hours) - 12 : hours}:${minutes} ${parseInt(hours) >= 12 ? 'PM' : 'AM'}`;
+                            const isBooked = !availableTimes.includes(time);
+                            
+                            return (
+                              <motion.button
+                                key={time}
+                                type="button"
+                                onClick={() => !isBooked && setSelectedTime(time)}
+                                whileHover={{ scale: isBooked ? 1 : 1.05 }}
+                                whileTap={{ scale: isBooked ? 1 : 0.95 }}
+                                className={`py-2 px-3 rounded-lg text-center transition-all ${
+                                  isBooked 
+                                    ? "bg-gray-100 text-gray-400 cursor-not-allowed"
+                                    : selectedTime === time
+                                      ? "bg-[#0C9383] text-white shadow-md"
+                                      : "bg-gray-100 hover:bg-gray-200"
+                                }`}
+                                disabled={isBooked}
+                              >
+                                {timeFormatted}
+                                {isBooked && <span className="block text-xs">Ocupado</span>}
+                              </motion.button>
+                            );
+                          })}
                         </div>
                       </div>
                     </div>
 
                     {/* Summary */}
-                    {(selectedService || selectedStaff || selectedDate || selectedServices.length > 0) && (
+                    {(selectedServices.length > 0 || currentService) && (
                       <motion.div
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
                         transition={{ delay: 0.2 }}
                         className="bg-[#F8FAF4] p-6 rounded-xl border border-[#0C9383]/20 mt-6"
                       >
-                        <h3 className="text-lg font-semibold text-[#2F3E2E] mb-4">Resumen de tu Cita</h3>
-                        
-                        {/* Servicios seleccionados */}
-                        {selectedServices.length > 0 && (
-                          <div className="mb-4 pb-4 border-b border-[#0C9383]/10">
-                            <h4 className="text-sm font-medium text-[#2F3E2E]">Servicios adicionales</h4>
-                            <div className="space-y-3 mt-2">
-                              {selectedServices.map((service) => (
-                                <div key={service.id} className="flex items-start gap-3">
-                                  <div className="w-16 h-16 rounded-md overflow-hidden">
-                                    <img 
-                                      src={service.imageUrl} 
-                                      alt={service.name}
-                                      className="w-full h-full object-cover"
-                                    />
-                                  </div>
-                                  <div className="flex-1">
-                                    <p className="text-[#2F3E2E] font-medium">{service.name}</p>
-                                    <div className="flex gap-4 mt-1">
-                                      <span className="text-xs text-[#0C9383] flex items-center">
-                                        <Clock size={12} className="mr-1" />
-                                        {service.duration} min
-                                      </span>
-                                      <span className="text-xs font-bold text-[#0C9383]">
-                                        ${service.price}
-                                      </span>
-                                    </div>
-                                  </div>
-                                  <button 
-                                    onClick={() => handleRemoveService(service.id)}
-                                    className="text-red-500 hover:text-red-700"
-                                  >
-                                    ×
-                                  </button>
+                        <h3 className="text-lg font-semibold text-[#2F3E2E] mb-4">Resumen de Servicios</h3>
+                        <div className="space-y-3">
+                          {selectedServices.map((service) => (
+                            <div key={service.id} className="flex items-start gap-3">
+                              <div className="w-16 h-16 rounded-md overflow-hidden">
+                                <img 
+                                  src={service.imageUrl} 
+                                  alt={service.name}
+                                  className="w-full h-full object-cover"
+                                />
+                              </div>
+                              <div className="flex-1">
+                                <p className="text-[#2F3E2E] font-medium">{service.name}</p>
+                                <div className="flex gap-4 mt-1">
+                                  <span className="text-xs text-[#0C9383] flex items-center">
+                                    <Clock size={12} className="mr-1" />
+                                    {service.duration} min
+                                  </span>
+                                  <span className="text-xs font-bold text-[#0C9383]">
+                                    ${service.price}
+                                  </span>
                                 </div>
-                              ))}
+                              </div>
                             </div>
-                          </div>
-                        )}
+                          ))}
+                        </div>
                         
+                        {/* Servicio actual */}
                         {currentService && (
                           <div className="mb-4 pb-4 border-b border-[#0C9383]/10">
                             <h4 className="text-sm font-medium text-[#2F3E2E]">Servicio actual</h4>
@@ -772,51 +1065,17 @@ const BookAppointment = () => {
                                   <span className="text-xs font-bold text-[#0C9383]">
                                     ${currentService.price}
                                   </span>
+                                  {selectedTime && (
+                                    <span className="text-xs text-[#0C9383]">
+                                      {selectedTime}
+                                    </span>
+                                  )}
                                 </div>
                               </div>
                             </div>
                           </div>
                         )}
                         
-                        {currentStaff && (
-                          <div className="mb-4 pb-4 border-b border-[#0C9383]/10">
-                            <h4 className="text-sm font-medium text-[#2F3E2E]">Profesional</h4>
-                            <div className="flex items-center gap-3 mt-2">
-                              <div className="w-12 h-12 rounded-full overflow-hidden">
-                                {currentStaff.imageUrl ? (
-                                  <img 
-                                    src={currentStaff.imageUrl} 
-                                    alt={currentStaff.displayName}
-                                    className="w-full h-full object-cover"
-                                  />
-                                ) : (
-                                  <div className="w-full h-full bg-gray-100 flex items-center justify-center text-[#0C9383]">
-                                    <UserCheck size={16} />
-                                  </div>
-                                )}
-                              </div>
-                              <div>
-                                <p className="text-[#2F3E2E] font-medium">{currentStaff.displayName}</p>
-                                <p className="text-xs text-[#0C9383]">{currentStaff.specialty}</p>
-                              </div>
-                            </div>
-                          </div>
-                        )}
-                        
-                        {selectedDate && selectedTime && (
-                          <div>
-                            <h4 className="text-sm font-medium text-[#2F3E2E]">Fecha & Hora</h4>
-                            <div className="flex items-center gap-2 mt-2">
-                              <div className="w-10 h-10 bg-[#0C9383]/10 rounded-full flex items-center justify-center text-[#0C9383]">
-                                <Calendar size={16} />
-                              </div>
-                              <p className="text-[#2F3E2E] font-medium">
-                                {format(selectedDate, 'PPP')} a las {selectedTime}
-                              </p>
-                            </div>
-                          </div>
-                        )}
-
                         {/* Total */}
                         <div className="mt-4 pt-4 border-t border-[#0C9383]/20">
                           <div className="flex justify-between items-center">
@@ -827,30 +1086,25 @@ const BookAppointment = () => {
                           </div>
                           {selectedDate && differenceInHours(selectedDate, new Date()) > 48 && (
                             <div className="text-sm text-green-600 mt-1">
-                              ¡Paga online ahora y obtén un 15% de descuento!
+                              ¡Paga online ahora y obtén un 15% de descuento en todos los servicios!
                             </div>
                           )}
                         </div>
 
-                        <div className="flex gap-3 mt-6">
-                          {selectedServices.length > 0 && (
-                            <button
-                              onClick={handleAddAnotherService}
-                              className="flex-1 bg-white border border-[#0C9383] text-[#0C9383] py-3 rounded-xl font-medium hover:bg-[#0C9383]/10 transition"
-                            >
-                              Agregar Otro Servicio
-                            </button>
-                          )}
+                        {/* Botón para proceder al pago */}
+                        <div className="flex justify-end mt-6">
                           <button
                             onClick={handleProceedToPayment}
                             disabled={!selectedDate || !selectedTime}
-                            className={`flex-1 py-3 rounded-xl text-white font-medium shadow-lg transition-all duration-300 ${
+                            className={`px-6 py-3 rounded-xl text-white font-medium shadow-lg transition-all duration-300 ${
                               selectedDate && selectedTime
                                 ? 'bg-gradient-to-r from-[#0C9383] to-[#99D4D6] hover:from-[#0C9383]/90 hover:to-[#99D4D6]/90 hover:shadow-xl'
                                 : 'bg-gray-300 cursor-not-allowed'
                             }`}
                           >
-                            Continuar al Pago
+                            {selectedDate && selectedTime 
+                              ? 'Continuar al Pago'
+                              : 'Selecciona fecha y hora'}
                           </button>
                         </div>
                       </motion.div>
@@ -878,7 +1132,7 @@ const BookAppointment = () => {
                       </p>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="grid grid-cols-1 gap-6">
                       <motion.div
                         whileHover={{ scale: 1.02 }}
                         whileTap={{ scale: 0.98 }}
@@ -895,12 +1149,12 @@ const BookAppointment = () => {
                           }`}>
                             <CreditCard size={20} />
                           </div>
-                          <h3 className="text-xl font-semibold">Pago Online</h3>
+                          <h3 className="text-xl font-semibold">Pago Online con Tarjeta de Débito</h3>
                         </div>
                         <ul className="space-y-2 text-gray-600">
                           <li className="flex items-start">
                             <Check className="w-4 h-4 text-green-500 mr-2 mt-1 flex-shrink-0" />
-                            <span>15% de descuento si pagas ahora</span>
+                            <span>15% de descuento si pagas ahora (válido hasta 48 horas antes)</span>
                           </li>
                           <li className="flex items-start">
                             <Check className="w-4 h-4 text-green-500 mr-2 mt-1 flex-shrink-0" />
@@ -958,17 +1212,18 @@ const BookAppointment = () => {
                       >
                         <h3 className="text-lg font-semibold mb-4 flex items-center">
                           <CreditCard className="w-5 h-5 text-[#0C9383] mr-2" />
-                          Detalles de la Tarjeta
+                          Detalles de la Tarjeta de Débito
                         </h3>
                         <div className="space-y-4">
                           <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">Número de Tarjeta</label>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Número de Tarjeta de Débito</label>
                             <input
                               type="text"
                               placeholder="1234 5678 9012 3456"
+                              maxLength={19}
                               className="w-full px-4 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-[#0C9383] focus:border-transparent"
                               value={cardDetails.number}
-                              onChange={(e) => setCardDetails({...cardDetails, number: e.target.value})}
+                              onChange={handleCardNumberChange}
                             />
                           </div>
                           <div className="grid grid-cols-2 gap-4">
@@ -977,9 +1232,10 @@ const BookAppointment = () => {
                               <input
                                 type="text"
                                 placeholder="MM/AA"
+                                maxLength={5}
                                 className="w-full px-4 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-[#0C9383] focus:border-transparent"
                                 value={cardDetails.expiry}
-                                onChange={(e) => setCardDetails({...cardDetails, expiry: e.target.value})}
+                                onChange={handleExpiryChange}
                               />
                             </div>
                             <div>
@@ -987,9 +1243,10 @@ const BookAppointment = () => {
                               <input
                                 type="text"
                                 placeholder="123"
+                                maxLength={3}
                                 className="w-full px-4 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-[#0C9383] focus:border-transparent"
                                 value={cardDetails.cvv}
-                                onChange={(e) => setCardDetails({...cardDetails, cvv: e.target.value})}
+                                onChange={(e) => setCardDetails({...cardDetails, cvv: e.target.value.replace(/\D/g, '').slice(0, 3)})}
                               />
                             </div>
                           </div>
@@ -1016,7 +1273,7 @@ const BookAppointment = () => {
                         )}
                       </div>
 
-                      {paymentMethod === 'web' && selectedDate && differenceInHours(selectedDate, new Date()) > 48 && (
+                      {paymentMethod === 'web' && (
                         <div className="flex justify-between py-2 border-t border-b border-[#0C9383]/20">
                           <span className="text-green-600">Descuento (15%)</span>
                           <span className="text-green-600 font-medium">
@@ -1031,6 +1288,12 @@ const BookAppointment = () => {
                           ${calculateTotal().toFixed(2)}
                         </span>
                       </div>
+
+                      {paymentMethod === 'web' && (
+                        <p className="text-sm text-green-600 mt-2">
+                          * El descuento del 15% se aplica al pagar online
+                        </p>
+                      )}
 
                       <button
                         onClick={handlePaymentSubmit}
@@ -1061,10 +1324,34 @@ const BookAppointment = () => {
                     </div>
                   </div>
                 )}
+                
               </motion.div>
+              {/* Botón para proceder - Solo en la vista de servicios */}
+              {activeStep === 'services' && (
+                <div className="flex justify-end mt-6">
+                  <button
+                    onClick={() => {
+                      if (selectedServices.length === 0) {
+                        toast.error('Por favor selecciona al menos un servicio');
+                        return;
+                      }
+                      setActiveStep('staff');
+                    }}
+                    className={`px-6 py-3 rounded-xl text-white font-medium shadow-lg transition-all duration-300 ${
+                      selectedServices.length > 0
+                        ? 'bg-gradient-to-r from-[#0C9383] to-[#99D4D6] hover:from-[#0C9383]/90 hover:to-[#99D4D6]/90 hover:shadow-xl'
+                        : 'bg-gray-300 cursor-not-allowed'
+                    }`}
+                  >
+                    Continuar ({selectedServices.length} servicio{selectedServices.length !== 1 ? 's' : ''} seleccionado{selectedServices.length !== 1 ? 's' : ''})
+                  </button>
+                </div>
+              )}
             </AnimatePresence>
+            
           </div>
         </motion.div>
+        
       </div>
 
       {/* Success Modal */}
@@ -1120,7 +1407,7 @@ const BookAppointment = () => {
                     onClick={() => {
                       setShowSuccess(false);
                       setSelectedService('');
-                      setSelectedStaff('');
+                      setSelectedStaff({});
                       setSelectedDate(null);
                       setSelectedTime('');
                       setSelectedServices([]);
