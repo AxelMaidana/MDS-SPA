@@ -63,9 +63,11 @@ const AdminProducts = () => {
   const [filteredProducts, setFilteredProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
   const [formLoading, setFormLoading] = useState(false);
   const [imageFiles, setImageFiles] = useState<File[]>([]);
   const [imagePreviews, setImagePreviews] = useState<string[]>([]);
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [filters, setFilters] = useState<ProductFilters>({
     search: "",
     type: "",
@@ -263,6 +265,29 @@ const AdminProducts = () => {
     setImagePreviews((prev) => prev.filter((_, i) => i !== index));
   };
 
+  const openEditModal = (product: Product) => {
+    setEditingProduct(product);
+    setFormData({
+      name: product.name || "",
+      description: product.description || "",
+      price: Number(product.price) || 0,
+      type: product.type,
+      category: product.category,
+      stock: Number(product.stock) || 0,
+      sku: product.sku || "",
+      images: product.images || [],
+      features: product.features || [],
+      benefits: product.benefits || [],
+      ingredients: product.ingredients || [],
+      usageInstructions:
+        (product as any).usageInstructions || (product as any).usage || "",
+      isActive: Boolean(product.isActive),
+    });
+    setImageFiles([]);
+    setImagePreviews(product.images || []);
+    setShowEditModal(true);
+  };
+
   const handleFormChange = (
     e: React.ChangeEvent<
       HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
@@ -326,6 +351,62 @@ const AdminProducts = () => {
     } catch (error) {
       console.error("Error adding product:", error);
       toast.error("Error al agregar el producto");
+    } finally {
+      setFormLoading(false);
+    }
+  };
+
+  const handleUpdateProduct = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingProduct) return;
+
+    if (!formData.name || !formData.description) {
+      toast.error("Por favor complete los campos obligatorios");
+      return;
+    }
+
+    setFormLoading(true);
+
+    try {
+      // Si hay nuevas imágenes seleccionadas, subirlas; si no, mantener las existentes
+      let finalImages = formData.images;
+      if (imageFiles.length > 0) {
+        const imageUrls: string[] = [];
+        for (const file of imageFiles) {
+          const imageRef = ref(storage, `products/${Date.now()}-${file.name}`);
+          const snapshot = await uploadBytes(imageRef, file);
+          const downloadURL = await getDownloadURL(snapshot.ref);
+          imageUrls.push(downloadURL);
+        }
+        finalImages = imageUrls;
+      }
+
+      const productRef = doc(db, "products", editingProduct.id);
+      await updateDoc(productRef, {
+        name: formData.name,
+        description: formData.description,
+        price: formData.price,
+        type: formData.type,
+        category: formData.category,
+        stock: formData.stock,
+        sku: formData.sku || generateSKU(),
+        images: finalImages,
+        features: formData.features,
+        benefits: formData.benefits,
+        ingredients: formData.ingredients,
+        usageInstructions: formData.usageInstructions,
+        isActive: formData.isActive,
+        updatedAt: serverTimestamp(),
+      });
+
+      toast.success("Producto actualizado exitosamente");
+      setShowEditModal(false);
+      setEditingProduct(null);
+      resetForm();
+      fetchProducts();
+    } catch (error) {
+      console.error("Error updating product:", error);
+      toast.error("Error al actualizar el producto");
     } finally {
       setFormLoading(false);
     }
@@ -572,8 +653,8 @@ const AdminProducts = () => {
                           }
                           className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
                             product.isActive
-                              ? "bg-green-500/20 text-green-300 hover:bg-green-500/30"
-                              : "bg-red-500/20 text-red-300 hover:bg-red-500/30"
+                              ? "bg-green-500/20 text-black hover:bg-green-500/30"
+                              : "bg-red-500/20 text-black hover:bg-red-500/30"
                           }`}
                         >
                           {product.isActive ? "Activo" : "Inactivo"}
@@ -584,7 +665,10 @@ const AdminProducts = () => {
                           <button className="p-2 text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors">
                             <Eye size={16} />
                           </button>
-                          <button className="p-2 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
+                          <button
+                            onClick={() => openEditModal(product)}
+                            className="p-2 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                          >
                             <Edit size={16} />
                           </button>
                           <button
@@ -844,6 +928,252 @@ const AdminProducts = () => {
                       <Plus size={20} />
                       Agregar Producto
                     </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Product Modal */}
+      {showEditModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-lg max-w-4xl w-full max-h-[90vh] overflow-auto">
+            <div className="flex justify-between items-center p-6 border-b border-gray-200">
+              <h3 className="text-2xl font-bold text-gray-900">
+                Editar Producto
+              </h3>
+              <button
+                onClick={() => {
+                  setShowEditModal(false);
+                  setEditingProduct(null);
+                }}
+                className="text-gray-500 hover:text-gray-700"
+                disabled={formLoading}
+              >
+                <X size={24} />
+              </button>
+            </div>
+
+            <form onSubmit={handleUpdateProduct} className="p-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Información básica */}
+                <div className="space-y-4">
+                  <h4 className="text-lg font-semibold text-gray-800 mb-4">
+                    Información Básica
+                  </h4>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Nombre del Producto *
+                    </label>
+                    <input
+                      type="text"
+                      name="name"
+                      value={formData.name}
+                      onChange={handleFormChange}
+                      className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-[#0C9383] focus:border-transparent"
+                      placeholder="Ej: Crema Hidratante Premium"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Descripción *
+                    </label>
+                    <textarea
+                      name="description"
+                      value={formData.description}
+                      onChange={handleFormChange}
+                      rows={3}
+                      className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-[#0C9383] focus:border-transparent"
+                      placeholder="Describe el producto..."
+                      required
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Precio *
+                      </label>
+                      <input
+                        type="number"
+                        name="price"
+                        value={formData.price}
+                        onChange={handleFormChange}
+                        min="0"
+                        step="0.01"
+                        className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-[#0C9383] focus:border-transparent"
+                        placeholder="0.00"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Stock *
+                      </label>
+                      <input
+                        type="number"
+                        name="stock"
+                        value={formData.stock}
+                        onChange={handleFormChange}
+                        min="0"
+                        className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-[#0C9383] focus:border-transparent"
+                        placeholder="0"
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      SKU
+                    </label>
+                    <input
+                      type="text"
+                      name="sku"
+                      value={formData.sku}
+                      onChange={handleFormChange}
+                      className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-[#0C9383] focus:border-transparent"
+                    />
+                  </div>
+                </div>
+
+                {/* Categorización */}
+                <div className="space-y-4">
+                  <h4 className="text-lg font-semibold text-gray-800 mb-4">
+                    Categorización
+                  </h4>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Tipo de Producto *
+                    </label>
+                    <select
+                      name="type"
+                      value={formData.type}
+                      onChange={handleFormChange}
+                      className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-[#0C9383] focus:border-transparent"
+                      required
+                    >
+                      <option value="estetica">Estética</option>
+                      <option value="relajacion">Relajación</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Categoría *
+                    </label>
+                    <select
+                      name="category"
+                      value={formData.category}
+                      onChange={handleFormChange}
+                      className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-[#0C9383] focus:border-transparent"
+                      required
+                    >
+                      {Object.values(PRODUCT_CATEGORIES)
+                        .filter((cat) => cat.type === formData.type)
+                        .map((category) => (
+                          <option key={category.id} value={category.id}>
+                            {category.icon} {category.name}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Estado
+                    </label>
+                    <select
+                      name="isActive"
+                      value={formData.isActive.toString()}
+                      onChange={(e) =>
+                        setFormData((prev) => ({
+                          ...prev,
+                          isActive: e.target.value === "true",
+                        }))
+                      }
+                      className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-[#0C9383] focus:border-transparent"
+                    >
+                      <option value="true">Activo</option>
+                      <option value="false">Inactivo</option>
+                    </select>
+                  </div>
+
+                  {/* Imágenes */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Imágenes
+                    </label>
+                    <input
+                      type="file"
+                      multiple
+                      accept="image/*"
+                      onChange={handleImageChange}
+                      className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-[#0C9383] focus:border-transparent"
+                    />
+
+                    {imagePreviews.length > 0 && (
+                      <div className="grid grid-cols-2 gap-2 mt-3">
+                        {imagePreviews.map((preview, index) => (
+                          <div key={index} className="relative">
+                            <img
+                              src={preview}
+                              alt={`Preview ${index + 1}`}
+                              className="w-full h-24 object-cover rounded-lg"
+                            />
+                            {imageFiles.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => removeImage(index)}
+                                className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-1 hover:bg-red-600"
+                              >
+                                <X size={12} />
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <p className="text-xs text-gray-500 mt-2">
+                      Si no seleccionas nuevas imágenes, se mantendrán las
+                      actuales.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Botones */}
+              <div className="flex justify-end space-x-4 mt-8 pt-6 border-t border-gray-200">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowEditModal(false);
+                    setEditingProduct(null);
+                  }}
+                  className="px-6 py-3 text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+                  disabled={formLoading}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-6 py-3 bg-[#0C9383] text-white rounded-lg hover:bg-[#0a7a6b] transition-colors flex items-center gap-2"
+                  disabled={formLoading}
+                >
+                  {formLoading ? (
+                    <>
+                      <Loader2 size={20} className="animate-spin" />
+                      Guardando...
+                    </>
+                  ) : (
+                    <>Guardar Cambios</>
                   )}
                 </button>
               </div>
