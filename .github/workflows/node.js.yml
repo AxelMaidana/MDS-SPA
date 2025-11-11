@@ -1,0 +1,32 @@
+name: Integración Continua - SPA Sentirse Bien
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Clonar el repositorio
+        uses: actions/checkout@v4
+
+      - name: ⚙️ Instalar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Instalar dependencias
+        run: npm install
+
+      - name: Ejecutar pruebas
+        run: npm test --if-present
+
+      - name: Construir la aplicación
+        run: npm run build
+
+      - name: Verificación final
+        run: echo " Build y pruebas ejecutadas correctamente."
