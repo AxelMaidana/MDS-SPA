@@ -256,17 +256,6 @@ const ProductDetail = () => {
                   <Share2 size={24} className="text-gray-600" />
                 </button>
               </div>
-
-              {/* Mensaje de éxito */}
-              {showSuccessMessage && (
-                <motion.div
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="bg-green-500/20 border border-green-500/50 rounded-lg p-4 text-green-200"
-                >
-                  ¡Producto agregado al carrito exitosamente!
-                </motion.div>
-              )}
             </motion.div>
           </div>
         </div>
@@ -330,6 +319,21 @@ const ProductDetail = () => {
               <p className="text-gray-700">{product.usage}</p>
             </div>
           )}
+        </div>
+
+        {/* Carrito flotante */}
+        <div className="fixed bottom-20 right-4 z-40">
+          <Link
+            to="/cart"
+            className="bg-[#0C9383] text-white w-[60px] h-[60px] rounded-full shadow-xl hover:bg-[#0a7a6b] hover:shadow-2xl transition-all duration-300 flex items-center justify-center relative border-2 border-white/20"
+          >
+            <ShoppingCart size={24} />
+            {getCartItemCount() > 0 && (
+              <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-6 w-6 flex items-center justify-center font-bold shadow-lg border-2 border-white">
+                {getCartItemCount()}
+              </span>
+            )}
+          </Link>
         </div>
 
         {/* Productos relacionados */}

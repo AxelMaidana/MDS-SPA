@@ -59,16 +59,22 @@ const handleSubmit = async (e: FormEvent) => {
       navigate('/', { state: { email, name } });
     }
   } catch (err: any) {
-    if (err.code === 'auth/email-already-in-use') {
-      setError('Este correo electrónico ya está registrado');
-    } else if (err.code === 'auth/invalid-email') {
-      setError('El correo electrónico no es válido');
-    } else if (err.code === 'auth/weak-password') {
-      setError('La contraseña es demasiado débil');
-    } else if (err.code === 'PRE_REGISTERED_USER') {
+    if (err.code === 'PRE_REGISTERED_USER') {
       navigate('/complete-registration', { state: { email, name } });
+    } else if (isLogin) {
+      // Para login, mostrar mensaje genérico de credenciales incorrectas
+      setError('Usuario o contraseña incorrectos');
     } else {
-      setError(err.message || 'Error desconocido durante el proceso');
+      // Para registro, manejar errores específicos
+      if (err.code === 'auth/email-already-in-use') {
+        setError('Este correo electrónico ya está registrado');
+      } else if (err.code === 'auth/invalid-email') {
+        setError('El correo electrónico no es válido');
+      } else if (err.code === 'auth/weak-password') {
+        setError('La contraseña es demasiado débil');
+      } else {
+        setError(err.message || 'Error desconocido durante el proceso');
+      }
     }
   } finally {
     setLoading(false);

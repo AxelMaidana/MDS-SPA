@@ -312,8 +312,34 @@ export function AuthProvider({ children }: AuthProviderProps) {
               };
             }
           }
+          // Si no es un usuario pre-registrado, lanzar error genérico de credenciales
+          throw {
+            code: "auth/invalid-credential",
+            message: "Usuario o contraseña incorrectos",
+          };
         }
-        throw authError; // Relanzar otros errores
+        // Manejar todos los códigos de error relacionados con credenciales incorrectas
+        // y mostrar un mensaje genérico para no revelar información sensible
+        if (
+          authError.code === "auth/user-not-found" ||
+          authError.code === "auth/wrong-password" ||
+          authError.code === "auth/invalid-email" ||
+          authError.code === "auth/invalid-login-credentials" ||
+          authError.code === "auth/invalid-credential"
+        ) {
+          throw {
+            code: authError.code,
+            message: "Usuario o contraseña incorrectos",
+          };
+        }
+        // Para cualquier otro error de autenticación, también mostrar mensaje genérico
+        if (authError.code && authError.code.startsWith("auth/")) {
+          throw {
+            code: authError.code,
+            message: "Usuario o contraseña incorrectos",
+          };
+        }
+        throw authError; // Relanzar otros errores que no sean de autenticación
       }
     } catch (error: any) {
       console.error("Error en login:", error);

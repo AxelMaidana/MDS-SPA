@@ -281,7 +281,7 @@ const Products = () => {
             <div className="mt-4">
               <button
                 onClick={clearFilters}
-                className="px-4 py-2 bg-red-500/20 text-red-200 rounded-lg hover:bg-red-500/30 transition-colors"
+                className="px-4 py-2 bg-red-500/50 text-white rounded-lg hover:bg-red-500/80 transition-colors"
               >
                 Limpiar Filtros
               </button>

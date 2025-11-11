@@ -31,9 +31,9 @@ const Login = () => {
       await login(email, password);
       navigate('/');
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    } catch (err) {
-      // Error is handled by the auth context
-      setError('Failed to log in');
+    } catch (err: any) {
+      // Mostrar mensaje genérico de credenciales incorrectas
+      setError('Usuario o contraseña incorrectos');
     } finally {
       setLoading(false);
     }
