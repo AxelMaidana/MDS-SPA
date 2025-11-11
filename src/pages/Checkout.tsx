@@ -56,6 +56,12 @@ const Checkout = () => {
   });
   const [isProcessing, setIsProcessing] = useState(false);
   const [errors, setErrors] = useState<Partial<CheckoutFormData>>({});
+  const [customerType, setCustomerType] = useState<
+    "Regular" | "Frecuente" | "Nuevo"
+  >("Nuevo");
+  const [purchaseAmountCondition, setPurchaseAmountCondition] = useState<
+    "mayor-igual-20k" | "menor-20k"
+  >("menor-20k");
 
   // Obtener método de pago desde la navegación
   useEffect(() => {
@@ -63,6 +69,31 @@ const Checkout = () => {
       setPaymentMethod(location.state.paymentMethod);
     }
   }, [location.state]);
+
+  // Determinar tipo de cliente y condición de monto de compra
+  useEffect(() => {
+    const cartTotal = getCartTotal();
+
+    // Determinar condición de monto de compra
+    if (cartTotal >= 20000) {
+      setPurchaseAmountCondition("mayor-igual-20k");
+    } else {
+      setPurchaseAmountCondition("menor-20k");
+    }
+
+    // Determinar tipo de cliente
+    if (currentUser) {
+      checkFrequentCustomer().then((isFrequent) => {
+        if (isFrequent) {
+          setCustomerType("Frecuente");
+        } else {
+          setCustomerType("Regular");
+        }
+      });
+    } else {
+      setCustomerType("Nuevo");
+    }
+  }, [cartItems, currentUser, getCartTotal]);
 
   // Validar formulario
   const validateForm = (): boolean => {
@@ -74,11 +105,15 @@ const Checkout = () => {
       newErrors.lastName = "El apellido es requerido";
     if (!formData.email.trim()) newErrors.email = "El email es requerido";
     if (!formData.phone.trim()) newErrors.phone = "El teléfono es requerido";
-    if (!formData.address.trim())
-      newErrors.address = "La dirección es requerida";
-    if (!formData.city.trim()) newErrors.city = "La ciudad es requerida";
-    if (!formData.postalCode.trim())
-      newErrors.postalCode = "El código postal es requerido";
+
+    // Solo validar dirección si no es pago en efectivo
+    if (paymentMethod !== "efectivo") {
+      if (!formData.address.trim())
+        newErrors.address = "La dirección es requerida";
+      if (!formData.city.trim()) newErrors.city = "La ciudad es requerida";
+      if (!formData.postalCode.trim())
+        newErrors.postalCode = "El código postal es requerido";
+    }
 
     // Validar email
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -131,15 +166,40 @@ const Checkout = () => {
         0
       );
       let discount = 0;
-      let discountType: "efectivo" | "cliente-frecuente" | undefined;
+      let discountType:
+        | "efectivo"
+        | "cliente-frecuente"
+        | "cliente-regular"
+        | "bienvenida"
+        | undefined;
 
-      // Aplicar descuentos
+      // Aplicar descuentos según tabla de condiciones (solo un descuento aplica)
       if (paymentMethod === "efectivo") {
         discount = subtotal * 0.1; // 10% descuento efectivo
         discountType = "efectivo";
-      } else if (isFrequentCustomer) {
-        discount = subtotal * 0.15; // 15% descuento cliente frecuente
-        discountType = "cliente-frecuente";
+      } else {
+        // Descuentos según tipo de cliente y monto de compra
+        if (customerType === "Frecuente") {
+          if (purchaseAmountCondition === "mayor-igual-20k") {
+            discount = subtotal * 0.2; // 20% descuento para cliente frecuente con compra ≥ $20.000
+            discountType = "cliente-frecuente";
+          } else {
+            discount = subtotal * 0.1; // 10% descuento para cliente frecuente con compra < $20.000
+            discountType = "cliente-frecuente";
+          }
+        } else if (customerType === "Regular") {
+          if (purchaseAmountCondition === "mayor-igual-20k") {
+            discount = subtotal * 0.1; // 10% descuento para cliente regular con compra ≥ $20.000
+            discountType = "cliente-regular";
+          }
+          // Sin descuento para cliente regular con compra < $20.000
+        } else if (customerType === "Nuevo") {
+          if (purchaseAmountCondition === "mayor-igual-20k") {
+            discount = subtotal * 0.05; // 5% descuento de bienvenida para cliente nuevo con compra ≥ $20.000
+            discountType = "bienvenida";
+          }
+          // Sin descuento para cliente nuevo con compra < $20.000
+        }
       }
 
       const total = subtotal - discount;
@@ -157,7 +217,10 @@ const Checkout = () => {
         items: cartItems,
         subtotal,
         discount,
-        discountType,
+        discountType: discountType as
+          | "efectivo"
+          | "cliente-frecuente"
+          | undefined,
         total,
         paymentMethod,
         status: "pending",
@@ -170,7 +233,7 @@ const Checkout = () => {
 
       // Guardar orden en Firestore
       const orderRef = doc(collection(db, "orders"));
-      await setDoc(orderRef, {
+      const orderData = {
         ...order,
         id: orderRef.id,
         createdAt: serverTimestamp(),
@@ -179,11 +242,17 @@ const Checkout = () => {
           lastName: formData.lastName,
           email: formData.email,
           phone: formData.phone,
-          address: formData.address,
-          city: formData.city,
-          postalCode: formData.postalCode,
+          // Solo incluir información de dirección si no es pago en efectivo
+          ...(paymentMethod !== "efectivo" && {
+            address: formData.address,
+            city: formData.city,
+            postalCode: formData.postalCode,
+          }),
+          notes: formData.notes,
         },
-      });
+      };
+
+      await setDoc(orderRef, orderData);
 
       // Limpiar carrito
       await clearCart();
@@ -308,7 +377,7 @@ const Checkout = () => {
               </div>
 
               <div className="mt-4">
-                <label className="block text-white font-medium mb-2">
+                <label className="block text-gray-700 font-medium mb-2">
                   Email *
                 </label>
                 <input
@@ -328,7 +397,7 @@ const Checkout = () => {
               </div>
 
               <div className="mt-4">
-                <label className="block text-white font-medium mb-2">
+                <label className="block text-gray-700 font-medium mb-2">
                   Teléfono *
                 </label>
                 <input
@@ -348,91 +417,192 @@ const Checkout = () => {
               </div>
             </div>
 
+            {/* Condiciones del Cliente */}
             <div className="bg-gray-50 border border-gray-200 rounded-2xl p-6">
               <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-3">
-                <MapPin size={24} />
-                Dirección de Envío
+                <CheckCircle size={24} />
+                Condiciones del Cliente
               </h2>
 
-              <div className="mt-4">
-                <label className="block text-white font-medium mb-2">
-                  Dirección *
-                </label>
-                <input
-                  type="text"
-                  value={formData.address}
-                  onChange={(e) =>
-                    setFormData({ ...formData, address: e.target.value })
-                  }
-                  className={`w-full px-4 py-3 rounded-lg border ${
-                    errors.address ? "border-red-500" : "border-gray-300"
-                  } focus:ring-2 focus:ring-[#0C9383] focus:border-transparent`}
-                  placeholder="Calle y número"
-                />
-                {errors.address && (
-                  <p className="text-red-300 text-sm mt-1">{errors.address}</p>
-                )}
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
                   <label className="block text-gray-700 font-medium mb-2">
-                    Ciudad *
+                    Tipo de Cliente
                   </label>
-                  <input
-                    type="text"
-                    value={formData.city}
-                    onChange={(e) =>
-                      setFormData({ ...formData, city: e.target.value })
-                    }
-                    className={`w-full px-4 py-3 rounded-lg border ${
-                      errors.city ? "border-red-500" : "border-gray-300"
-                    } focus:ring-2 focus:ring-[#0C9383] focus:border-transparent`}
-                    placeholder="Buenos Aires"
-                  />
-                  {errors.city && (
-                    <p className="text-red-300 text-sm mt-1">{errors.city}</p>
-                  )}
+                  <div className="px-4 py-3 bg-white rounded-lg border border-gray-300">
+                    <span
+                      className={`font-semibold ${
+                        customerType === "Frecuente"
+                          ? "text-green-600"
+                          : customerType === "Regular"
+                          ? "text-blue-600"
+                          : "text-orange-600"
+                      }`}
+                    >
+                      {customerType}
+                    </span>
+                  </div>
+                  <p className="text-sm text-gray-600 mt-1">
+                    {customerType === "Frecuente" &&
+                      `Cliente con 3+ servicios en los últimos 30 días • ${
+                        purchaseAmountCondition === "mayor-igual-20k"
+                          ? "20%"
+                          : "10%"
+                      } descuento`}
+                    {customerType === "Regular" &&
+                      `Cliente registrado con historial • ${
+                        purchaseAmountCondition === "mayor-igual-20k"
+                          ? "10%"
+                          : "sin"
+                      } descuento`}
+                    {customerType === "Nuevo" &&
+                      `Cliente sin cuenta o primer compra • ${
+                        purchaseAmountCondition === "mayor-igual-20k"
+                          ? "5%"
+                          : "sin"
+                      } descuento`}
+                  </p>
                 </div>
 
                 <div>
                   <label className="block text-gray-700 font-medium mb-2">
-                    Código Postal *
+                    Monto de Compra
+                  </label>
+                  <div className="px-4 py-3 bg-white rounded-lg border border-gray-300">
+                    <span
+                      className={`font-semibold ${
+                        purchaseAmountCondition === "mayor-igual-20k"
+                          ? "text-green-600"
+                          : "text-orange-600"
+                      }`}
+                    >
+                      {purchaseAmountCondition === "mayor-igual-20k"
+                        ? "≥ $20.000"
+                        : "< $20.000"}
+                    </span>
+                  </div>
+                  <p className="text-sm text-gray-600 mt-1">
+                    {purchaseAmountCondition === "mayor-igual-20k" &&
+                      "Compra mayor o igual a $20.000"}
+                    {purchaseAmountCondition === "menor-20k" &&
+                      "Compra menor a $20.000"}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Dirección de Envío - Solo mostrar si no es pago en efectivo */}
+            {paymentMethod !== "efectivo" && (
+              <div className="bg-gray-50 border border-gray-200 rounded-2xl p-6">
+                <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-3">
+                  <MapPin size={24} />
+                  Dirección de Envío
+                </h2>
+
+                <div className="mt-4">
+                  <label className="block text-gray-700 font-medium mb-2">
+                    Dirección *
                   </label>
                   <input
                     type="text"
-                    value={formData.postalCode}
+                    value={formData.address}
                     onChange={(e) =>
-                      setFormData({ ...formData, postalCode: e.target.value })
+                      setFormData({ ...formData, address: e.target.value })
                     }
                     className={`w-full px-4 py-3 rounded-lg border ${
-                      errors.postalCode ? "border-red-500" : "border-gray-300"
+                      errors.address ? "border-red-500" : "border-gray-300"
                     } focus:ring-2 focus:ring-[#0C9383] focus:border-transparent`}
-                    placeholder="1234"
+                    placeholder="Calle y número"
                   />
-                  {errors.postalCode && (
+                  {errors.address && (
                     <p className="text-red-300 text-sm mt-1">
-                      {errors.postalCode}
+                      {errors.address}
                     </p>
                   )}
                 </div>
-              </div>
 
-              <div className="mt-4">
-                <label className="block text-white font-medium mb-2">
-                  Notas adicionales (opcional)
-                </label>
-                <textarea
-                  value={formData.notes}
-                  onChange={(e) =>
-                    setFormData({ ...formData, notes: e.target.value })
-                  }
-                  className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-[#0C9383] focus:border-transparent"
-                  rows={3}
-                  placeholder="Instrucciones especiales para la entrega..."
-                />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                  <div>
+                    <label className="block text-gray-700 font-medium mb-2">
+                      Ciudad *
+                    </label>
+                    <input
+                      type="text"
+                      value={formData.city}
+                      onChange={(e) =>
+                        setFormData({ ...formData, city: e.target.value })
+                      }
+                      className={`w-full px-4 py-3 rounded-lg border ${
+                        errors.city ? "border-red-500" : "border-gray-300"
+                      } focus:ring-2 focus:ring-[#0C9383] focus:border-transparent`}
+                      placeholder="Buenos Aires"
+                    />
+                    {errors.city && (
+                      <p className="text-red-300 text-sm mt-1">{errors.city}</p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-gray-700 font-medium mb-2">
+                      Código Postal *
+                    </label>
+                    <input
+                      type="text"
+                      value={formData.postalCode}
+                      onChange={(e) =>
+                        setFormData({ ...formData, postalCode: e.target.value })
+                      }
+                      className={`w-full px-4 py-3 rounded-lg border ${
+                        errors.postalCode ? "border-red-500" : "border-gray-300"
+                      } focus:ring-2 focus:ring-[#0C9383] focus:border-transparent`}
+                      placeholder="1234"
+                    />
+                    {errors.postalCode && (
+                      <p className="text-red-300 text-sm mt-1">
+                        {errors.postalCode}
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="mt-4">
+                  <label className="block text-gray-700 font-medium mb-2">
+                    Notas adicionales (opcional)
+                  </label>
+                  <textarea
+                    value={formData.notes}
+                    onChange={(e) =>
+                      setFormData({ ...formData, notes: e.target.value })
+                    }
+                    className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-[#0C9383] focus:border-transparent"
+                    rows={3}
+                    placeholder="Instrucciones especiales para la entrega..."
+                  />
+                </div>
               </div>
-            </div>
+            )}
+
+            {/* Mensaje para pago en efectivo */}
+            {paymentMethod === "efectivo" && (
+              <div className="bg-yellow-50 border border-yellow-200 rounded-2xl p-6 mb-6">
+                <h2 className="text-2xl font-bold text-yellow-800 mb-4 flex items-center gap-3">
+                  Pago en Efectivo
+                </h2>
+                <p className="text-yellow-700 mb-4">
+                  Has seleccionado pagar en efectivo. Por favor, acércate a
+                  nuestra sucursal para retirar tu pedido y realizar el pago.
+                </p>
+                <div className="bg-yellow-100 p-4 rounded-lg">
+                  <p className="text-yellow-800 font-semibold mb-2">
+                    Horario de atención:
+                  </p>
+                  <p className="text-yellow-700">
+                    Lunes a Viernes: 9:00 - 18:00
+                  </p>
+                  <p className="text-yellow-700">Sábados: 9:00 - 13:00</p>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Resumen */}
@@ -466,12 +636,59 @@ const Checkout = () => {
                   <span>${subtotal.toLocaleString()}</span>
                 </div>
 
+                {/* Mostrar descuentos aplicados */}
                 {paymentMethod === "efectivo" && (
-                  <div className="flex justify-between text-green-300">
-                    <span>Descuento efectivo (10%)</span>
-                    <span>-${(subtotal * 0.1).toLocaleString()}</span>
+                  <div className="flex justify-between text-green-600 bg-green-50 px-3 py-2 rounded-lg">
+                    <span> Descuento por pago en efectivo (10%)</span>
+                    <span className="font-semibold">
+                      -${(subtotal * 0.1).toLocaleString()}
+                    </span>
                   </div>
                 )}
+
+                {customerType === "Frecuente" &&
+                  paymentMethod !== "efectivo" && (
+                    <div className="flex justify-between text-purple-600 bg-purple-50 px-3 py-2 rounded-lg">
+                      <span>
+                        Descuento cliente frecuente (
+                        {purchaseAmountCondition === "mayor-igual-20k"
+                          ? "20%"
+                          : "10%"}
+                        )
+                      </span>
+                      <span className="font-semibold">
+                        -$
+                        {(
+                          subtotal *
+                          (purchaseAmountCondition === "mayor-igual-20k"
+                            ? 0.2
+                            : 0.1)
+                        ).toLocaleString()}
+                      </span>
+                    </div>
+                  )}
+
+                {customerType === "Regular" &&
+                  paymentMethod !== "efectivo" &&
+                  purchaseAmountCondition === "mayor-igual-20k" && (
+                    <div className="flex justify-between text-blue-600 bg-blue-50 px-3 py-2 rounded-lg">
+                      <span> Descuento cliente regular (10%)</span>
+                      <span className="font-semibold">
+                        -${(subtotal * 0.1).toLocaleString()}
+                      </span>
+                    </div>
+                  )}
+
+                {customerType === "Nuevo" &&
+                  paymentMethod !== "efectivo" &&
+                  purchaseAmountCondition === "mayor-igual-20k" && (
+                    <div className="flex justify-between text-orange-600 bg-orange-50 px-3 py-2 rounded-lg">
+                      <span> Descuento de bienvenida (5%)</span>
+                      <span className="font-semibold">
+                        -${(subtotal * 0.05).toLocaleString()}
+                      </span>
+                    </div>
+                  )}
 
                 <hr className="border-gray-300" />
 
@@ -494,8 +711,17 @@ const Checkout = () => {
                   </>
                 ) : (
                   <>
-                    <CreditCard size={24} />
-                    Confirmar Compra
+                    {paymentMethod === "efectivo" ? (
+                      <>
+                        <CheckCircle size={24} />
+                        Confirmar Retiro en Sucursal
+                      </>
+                    ) : (
+                      <>
+                        <CreditCard size={24} />
+                        Confirmar Compra
+                      </>
+                    )}
                   </>
                 )}
               </button>
